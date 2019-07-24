@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lin-job-0704-1
+  labels:
+    app: lin-worker
+    user: lin
+spec:
+  template:
+    metadata:
+      labels:
+        app: lin-worker
+        user: lin
+    spec:
+      restartPolicy: Never
+      containers:
+        - name:  lin-worker
+          image: ic-registry.epfl.ch/mlo/lin-pytorch
+          workingDir: /mlodata1/tlin/decentralized_code_debug
+          imagePullPolicy: Always
+          env:
+            - name: ROLE
+              value: worker
+            - name: JOBMONITOR_TIMESERIES_HOST
+              value: lin-timeseries
+            - name: JOBMONITOR_METADATA_HOST
+              value: lin-metadata
+          volumeMounts:
+            - mountPath: /mlodata1
+              name: mlodata
+            - mountPath: /dev/shm
+              name: dshm
+          resources:
+            limits:
+              nvidia.com/gpu: 2
+          command: [
+            "/entrypoint.sh", "bash",
+            "exps/finetune-lstm/final_3.sh"
+          ]
+      volumes:
+        - name: mlodata
+          persistentVolumeClaim:
+            claimName: pv-mloraw1
+        - name: dshm
+          emptyDir:
+            medium: Memory
+  backoffLimit: 4

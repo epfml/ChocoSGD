@@ -1,0 +1,56 @@
+apiVersion: apps/v1beta2
+kind: StatefulSet
+metadata:
+  name: lin-worker
+  labels:
+    name: lin-worker
+    user: lin
+spec:
+  selector:
+    matchLabels:
+      name: lin-worker
+  serviceName: lin-worker
+  replicas: 4
+  template:
+    metadata:
+      labels:
+        name: lin-worker
+        user: lin
+    spec:
+      containers:
+        - name: lin-worker
+          image: ic-registry.epfl.ch/mlo/lin-pytorch
+          imagePullPolicy: Always
+          command:
+           - "/bin/bash"
+           - "-c"
+           - "--"
+          args :
+            - '/entrypoint.sh; /usr/local/bin/entrypoint.sh; sleep infinity'
+          ports:
+            - containerPort: 22
+              name: ssh
+          resources:
+            limits:
+              nvidia.com/gpu: 2
+              # cpu: 32
+              # memory: 85Gi
+          env:
+            - name: ROLE
+              value: worker
+            - name: JOBMONITOR_TIMESERIES_HOST
+              value: lin-timeseries
+            - name: JOBMONITOR_METADATA_HOST
+              value: lin-metadata
+          volumeMounts:
+            - mountPath: /mlodata1
+              name: mlodata
+            - mountPath: /dev/shm
+              name: dshm
+      volumes:
+        - name: mlodata
+          persistentVolumeClaim:
+            claimName: pv-mloraw1
+        - name: dshm
+          emptyDir:
+            medium: Memory

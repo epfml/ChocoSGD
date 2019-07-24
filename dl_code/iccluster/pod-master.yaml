@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lin-master
+  labels:
+    name: lin-master
+    role: master
+    user: lin
+spec:
+  containers:
+    - name:  lin-master
+      image: ic-registry.epfl.ch/mlo/lin-pytorch
+      imagePullPolicy: Always
+      command:
+       - "/bin/bash"
+       - "-c"
+       - "--"
+      args :
+       - '/entrypoint.sh; /usr/local/bin/entrypoint.sh; sleep infinity'
+      ports:
+        - containerPort: 8888
+          name: notebook
+        - containerPort: 6006
+          name: tensorboard
+        - containerPort: 22
+          name: ssh
+      env:
+        - name: ROLE
+          value: master
+        - name: JOBMONITOR_TIMESERIES_HOST
+          value: lin-timeseries
+        - name: JOBMONITOR_METADATA_HOST
+          value: lin-metadata
+      resources:
+        requests:
+          nvidia.com/gpu: 2
+          cpu: 32
+          memory: 85Gi
+        limits:
+          nvidia.com/gpu: 2
+          cpu: 32
+          memory: 85Gi
+      volumeMounts:
+        - mountPath: /mlodata1
+          name: mlodata
+        - mountPath: /dev/shm
+          name: dshm
+  volumes:
+    - name: mlodata
+      persistentVolumeClaim:
+        claimName: mlo-scratch
+    - name: dshm
+      emptyDir:
+        medium: Memory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lin-master
+  labels:
+    name: lin-master
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 8888
+      name: notebook
+    - port: 6006
+      name: tensorboard
+    - port: 22
+      name: ssh
+  selector:
+    name: lin-master

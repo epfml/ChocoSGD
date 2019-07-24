@@ -1,0 +1,13 @@
+$HOME/conda/envs/pytorch-py3.6/bin/python run.py \
+    --arch rnn_lm --rnn_n_hidden 650 --rnn_n_layers 3 --rnn_bptt_len 30 \
+    --rnn_clip 0.4 --rnn_use_pretrained_emb False --rnn_tie_weights True --drop_rate 0.40 \
+    --optimizer sgd --avg_model True --experiment test \
+    --data wikitext2 --pin_memory True \
+    --batch_size 32 --base_batch_size 24 --num_workers 2 --eval_freq 1 \
+    --num_epochs 300 --partition_data random --reshuffle_per_epoch False --stop_criteria epoch \
+    --n_mpi_process 32 --n_sub_process 1 --world 0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1 --on_cuda True --use_ipc False --comm_device cuda \
+    --lr 2.5 --lr_scaleup True --lr_scaleup_factor graph --lr_warmup True --lr_warmup_epochs 5 \
+    --lr_schedule_scheme custom_multistep --lr_change_epochs 150,225 --lr_decay 10 \
+    --weight_decay 0 --use_nesterov False --momentum_factor 0 \
+    --hostfile iccluster/hostfile2 --graph_topology social --track_time True --display_tracked_time True \
+    --python_path $HOME/conda/envs/pytorch-py3.6/bin/python --mpi_path $HOME/.openmpi/ --evaluate_avg True
