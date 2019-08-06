@@ -40,7 +40,7 @@ def train_and_validate(
         # init the hidden state.
         _hidden = (
             model.module.init_hidden(conf.batch_size)
-            if "AllReduceDataParallel" == model.__class__.__name__
+            if "DataParallel" == model.__class__.__name__
             else model.init_hidden(conf.batch_size)
         )
 
@@ -52,7 +52,7 @@ def train_and_validate(
             # repackage the hidden.
             _hidden = (
                 model.module.repackage_hidden(_hidden)
-                if "AllReduceDataParallel" == model.__class__.__name__
+                if "DataParallel" == model.__class__.__name__
                 else model.repackage_hidden(_hidden)
             )
 
@@ -180,7 +180,7 @@ def validate(conf, model, optimizer, criterion, scheduler, metrics, data_loader)
         # define hidden state for RNN.
         _hidden = (
             model.module.init_hidden(conf.batch_size)
-            if "AllReduceDataParallel" == model.__class__.__name__
+            if "DataParallel" == model.__class__.__name__
             else model.init_hidden(conf.batch_size)
         )
 
@@ -191,7 +191,7 @@ def validate(conf, model, optimizer, criterion, scheduler, metrics, data_loader)
             # repackage the hidden.
             _hidden = (
                 model.module.repackage_hidden(_hidden)
-                if "AllReduceDataParallel" == model.__class__.__name__
+                if "DataParallel" == model.__class__.__name__
                 else model.repackage_hidden(_hidden)
             )
 

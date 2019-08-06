@@ -60,15 +60,17 @@ def main(conf):
 
     # create model
     model = create_model.define_model(conf, data_loader=data_loader)
-    if conf.graph.on_cuda:
-        if conf.n_sub_process > 1:
-            model = AllReduceDataParallel(module=model, conf=conf)
 
     # define the lr scheduler.
     scheduler = create_scheduler.Scheduler(conf)
 
     # define the optimizer.
     optimizer = create_optimizer.define_optimizer(conf, model)
+
+    # add model with data-parallel wrapper.
+    if conf.graph.on_cuda:
+        if conf.n_sub_process > 1:
+            model = torch.nn.DataParallel(model, device_ids=conf.graph.device)
 
     # (optional) reload checkpoint
     checkpoint.maybe_resume_from_checkpoint(conf, model, optimizer)
@@ -86,9 +88,7 @@ def main(conf):
         criterion = nn.CrossEntropyLoss(reduction="mean")
         criterion = criterion.cuda() if conf.graph.on_cuda else criterion
         metrics = create_metrics.Metrics(
-            model.module
-            if "AllReduceDataParallel" == model.__class__.__name__
-            else model,
+            model.module if "DataParallel" == model.__class__.__name__ else model,
             task="language_modeling",
         )
 
@@ -108,9 +108,7 @@ def main(conf):
         criterion = nn.CrossEntropyLoss(reduction="mean")
         criterion = criterion.cuda() if conf.graph.on_cuda else criterion
         metrics = create_metrics.Metrics(
-            model.module
-            if "AllReduceDataParallel" == model.__class__.__name__
-            else model,
+            model.module if "DataParallel" == model.__class__.__name__ else model,
             task="classification",
         )
 
