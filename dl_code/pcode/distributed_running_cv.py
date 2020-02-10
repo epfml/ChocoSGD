@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 import gc
+import copy
 import numpy as np
 import torch
 import torch.distributed as dist
 
-from pcode.create_dataset import define_dataset, load_data_batch
+from pcode.create_dataset import define_dataset, load_data_batch, _define_cv_dataset
 
 from pcode.utils.checkpoint import save_to_checkpoint
 from pcode.utils.logging import (
@@ -14,6 +15,7 @@ from pcode.utils.logging import (
 )
 from pcode.utils.stat_tracker import RuntimeTracker
 import pcode.utils.error_handler as error_handler
+import pcode.utils.auxiliary as auxiliary
 
 # sys.excepthook = error_handler.global_except_hook
 
@@ -26,6 +28,13 @@ def train_and_validate(
     tracker_tr = RuntimeTracker(
         metrics_to_track=metrics.metric_names, on_cuda=conf.graph.on_cuda
     )
+
+    # prepare the dataloader for the consensus evaluation.
+    _data_loader = {
+        "val_loader": _define_cv_dataset(
+            conf, partition_type=None, dataset_type="train", force_shuffle=True
+        )
+    }
 
     # get the timer.
     timer = conf.timer
@@ -73,6 +82,23 @@ def train_and_validate(
                 # refresh the logging cache at the begining of each epoch.
                 tracker_tr.reset()
 
+                # evaluate (and only inference) on the whole training loader.
+                if (
+                    "train" in conf.evaluate_consensus or scheduler.is_stop()
+                ) and not conf.train_fast:
+                    # evaluate on the local model.
+                    validate(
+                        conf,
+                        model,
+                        optimizer,
+                        criterion,
+                        scheduler,
+                        metrics,
+                        data_loader=_data_loader,
+                        on_averaged_model=True,
+                        on_dataset="train",
+                    )
+
                 # determine if the training is finished.
                 if scheduler.is_stop():
                     # save json.
@@ -110,7 +136,14 @@ def do_validate(conf, model, optimizer, criterion, scheduler, metrics, data_load
     # wait until the whole group enters this function, and then evaluate.
     print("Enter validation phase.")
     performance = validate(
-        conf, model, optimizer, criterion, scheduler, metrics, data_loader
+        conf,
+        model,
+        optimizer,
+        criterion,
+        scheduler,
+        metrics,
+        data_loader=data_loader,
+        on_averaged_model="val" in conf.evaluate_consensus,
     )
 
     # remember best performance and display the val info.
@@ -145,7 +178,8 @@ def validate(
     scheduler,
     metrics,
     data_loader,
-    label="local_model",
+    on_averaged_model=True,
+    on_dataset="val",
 ):
     """A function for model evaluation."""
 
@@ -172,6 +206,46 @@ def validate(
         global_performance = tracker_te.evaluate_global_metrics()
         return global_performance
 
-    # evaluate each local model on the validation dataset.
-    global_performance = _evaluate(model, label=label)
+    # evaluate the averaged local model.
+    if (
+        conf.graph_topology != "complete"
+        and not conf.train_fast
+        and conf.evaluate_consensus
+        and on_averaged_model
+    ):
+        conf.logger.log(
+            f"eval the averaged model on full {'training' if on_dataset == 'train' else 'val'} data."
+        )
+        copied_model = copy.deepcopy(
+            model.module if "DataParallel" == model.__class__.__name__ else model
+        )
+        optimizer.world_aggregator.agg_model(copied_model, op="avg")
+        _evaluate(
+            copied_model,
+            label="averaged_model_on_full_val"
+            if on_dataset == "val"
+            else "averaged_model_on_full_train",
+        )
+
+        # get the l2 distance of the local model to the averaged model
+        conf.logger.log_metric(
+            name="stat",
+            values={
+                "rank": conf.graph.rank,
+                "epoch": scheduler.epoch_,
+                "distance": auxiliary.get_model_difference(model, copied_model),
+            },
+            tags={"split": "test", "type": "averaged_model"},
+        )
+
+    # evaluate each local model
+    conf.logger.log(
+        f"eval the local model on full {'training' if on_dataset == 'train' else 'val'} data."
+    )
+    global_performance = _evaluate(
+        model,
+        label="local_model_on_full_val"
+        if on_dataset == "val"
+        else "local_model_on_full_train",
+    )
     return global_performance

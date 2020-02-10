@@ -2,6 +2,7 @@
 import numpy as np
 import torch
 
+from pcode.create_dataset import load_data_batch
 from pcode.utils.checkpoint import save_to_checkpoint
 from pcode.utils.logging import (
     display_training_stat,
@@ -10,7 +11,7 @@ from pcode.utils.logging import (
 )
 from pcode.utils.stat_tracker import RuntimeTracker
 import pcode.utils.error_handler as error_handler
-from pcode.create_dataset import load_data_batch
+import pcode.utils.auxiliary as auxiliary
 
 
 # sys.excepthook = error_handler.global_except_hook
@@ -53,13 +54,13 @@ def train_and_validate(
                 _input = batch.text[
                     :,
                     conf.graph.rank
-                    * conf.batch_size : (conf.graph.rank + 1)
+                    * conf.batch_size: (conf.graph.rank + 1)
                     * conf.batch_size,
                 ]
                 _target = batch.target[
                     :,
                     conf.graph.rank
-                    * conf.batch_size : (conf.graph.rank + 1)
+                    * conf.batch_size: (conf.graph.rank + 1)
                     * conf.batch_size,
                 ]
                 _input, _target = load_data_batch(conf, _input, _target)
@@ -83,12 +84,14 @@ def train_and_validate(
 
             with timer("sync_complete", epoch=scheduler.epoch_):
                 # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-                torch.nn.utils.clip_grad_norm_(model.parameters(), conf.rnn_clip)
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), conf.rnn_clip)
                 n_bits_to_transmit = optimizer.step(timer=timer)
                 scheduler.step()
 
             # display the logging info.
-            display_training_stat(conf, scheduler, tracker_tr, n_bits_to_transmit)
+            display_training_stat(
+                conf, scheduler, tracker_tr, n_bits_to_transmit)
 
             # finish one epoch training and to decide if we want to val our model.
             if scheduler.epoch_ % 1 == 0:
@@ -123,10 +126,12 @@ def train_and_validate(
 def inference(conf, model, criterion, metrics, _input, _target, _hidden, tracker=None):
     """Inference on the given model and get loss and accuracy."""
     output, _hidden = model(_input, _hidden)
-    loss = criterion(output.view(-1, conf.n_tokens), _target.contiguous().view(-1))
+    loss = criterion(output.view(-1, conf.n_tokens),
+                     _target.contiguous().view(-1))
     performance = metrics.evaluate(loss, output, _target)
     if tracker is not None:
-        tracker.update_metrics([loss.item()] + performance, n_samples=_input.size(0))
+        tracker.update_metrics(
+            [loss.item()] + performance, n_samples=_input.size(0))
     return loss, _hidden
 
 
@@ -169,6 +174,7 @@ def validate(
     metrics,
     data_loader,
     label="local_model",
+    force_evaluate_on_averaged_model=True,
 ):
     """A function for model evaluation."""
 

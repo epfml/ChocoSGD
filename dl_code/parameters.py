@@ -113,7 +113,12 @@ def get_args():
     parser.add_argument("--majority_vote", default=False, type=str2bool)
 
     parser.add_argument("--consensus_stepsize", default=0.9, type=float)
-    parser.add_argument("--evaluate_consensus", default=False, type=str2bool)
+    parser.add_argument(
+        "--evaluate_consensus",
+        default="val",
+        type=str,
+        help="determine the dataset used for the evaluation (on averaged model).",
+    )
 
     parser.add_argument("--mask_momentum", default=False, type=str2bool)
     parser.add_argument("--clip_grad", default=False, type=str2bool)

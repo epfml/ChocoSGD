@@ -2,7 +2,7 @@
 Our experiments heavily rely on `Docker` and `Kubernetes`. For the detailed experimental environment setup, please refer to dockerfile under the `environments` folder.
 
 
-## Use case of distributed training (centralized)
+## Use case of distributed training (centralized/decentralized)
 Some simple explanation of the arguments used in the code.
 * Arguments related to *distributed training*:
     * The `n_mpi_process` and `n_sub_process` indicates the number of nodes and the number of GPUs for each node. The data-parallel wrapper is adapted and applied locally for each node.
@@ -16,11 +16,12 @@ Some simple explanation of the arguments used in the code.
     * The `graph_topology` 
     * The `optimizer` will decide the type of distributed training, e.g., centralized SGD, decentralized SGD
     * The `comm_op` specifies the communication compressor we can use, e.g., `sign+norm`, `random-k`, `top-k`.
+    * The `consensus_stepsize` determines the `consensus stepsize` for different decentralized algorithms (e.g. `parallel_choco`, `deep_squeeze`).
 * Arguments related to *learning*:
     * The `lr_scaleup`, `lr_warmup` and `lr_warmup_epochs` will decide if we want to scale up the learning rate, or warm up the learning rate. For more details, please check `pcode/create_scheduler.py`.
 
 ### Examples
-The script below trains `ResNet-20` with `CIFAR-10`, as an example of centralized training algorithm `CHOCO`.
+The script below trains `ResNet-20` with `CIFAR-10`, as an example of centralized training algorithm `CHOCO`. More examples can be found in `exps`.
 ```bash
 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 $HOME/conda/envs/pytorch-py3.6/bin/python run.py \
     --arch resnet20 --optimizer parallel_choco \
@@ -34,6 +35,6 @@ OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 $HOME/conda/envs/pytorch-py3.6/bin/python ru
     --lr_scheduler MultiStepLR --lr_decay 0.1 --lr_milestones 150,225 \
     --comm_op sign --consensus_stepsize 0.5 --compress_ratio 0.9 --quantize_level 16 --is_biased True \
     --weight_decay 1e-4 --use_nesterov True --momentum_factor 0.9 \
-    --hostfile hostfile --graph_topology complete --track_time True --display_tracked_time True \
+    --hostfile hostfile --graph_topology ring --track_time True --display_tracked_time True \
     --python_path $HOME/conda/envs/pytorch-py3.6/bin/python --mpi_path $HOME/.openmpi/
 ```
