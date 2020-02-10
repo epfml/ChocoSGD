@@ -2,7 +2,9 @@
 from copy import deepcopy
 
 import torch
+import torch.distributed as dist
 from torch.optim.optimizer import Optimizer, required
+import torch.multiprocessing as mp
 
 import pcode.optim.utils as utils
 import pcode.utils.communication as comm
@@ -35,7 +37,8 @@ class ParallelCHOCO(Optimizer):
             nesterov=nesterov,
         )
         if nesterov and (momentum <= 0 or dampening != 0):
-            raise ValueError("Nesterov momentum requires a momentum and zero dampening")
+            raise ValueError(
+                "Nesterov momentum requires a momentum and zero dampening")
         super(ParallelCHOCO, self).__init__(params, defaults)
 
         # store the whole training arguments.
@@ -44,12 +47,6 @@ class ParallelCHOCO(Optimizer):
         # define the aggregator.
         self.rank = conf.graph.rank
         self.neighbors_info = conf.graph.get_neighborhood()
-        self.aggregator = comm.get_aggregators(
-            cur_rank=self.rank,
-            world=conf.graph.ranks,
-            neighbors_info=self.neighbors_info,
-            aggregator_type="decentralized",
-        )
         self.world_aggregator = comm.get_aggregators(
             cur_rank=self.rank,
             world=conf.graph.ranks,
@@ -63,14 +60,89 @@ class ParallelCHOCO(Optimizer):
         self.param_names = list(
             enumerate([group["name"] for group in self.param_groups])
         )
-        self.init_neighbor_hat_params()
-        self.consenus_stepsize = conf.choco_consenus_stepsize
 
-        # related to sparsification/quantization.
-        self.compressor = CHOCOCompressor(
-            aggregator=self.aggregator,
+        # efficient sync (try to hide the communication cost).
+        self.sync_queue = mp.Queue()
+        self.gossiped_dist_model_flag = mp.Event()
+        self.updated_local_model_flag = mp.Event()
+        self.sync_thread = mp.Process(
+            target=ParallelCHOCO._sync_thread_func,
+            args=(
+                self.gossiped_dist_model_flag,
+                self.updated_local_model_flag,
+                self.sync_queue,
+                self.param_names,
+                self.conf.timer,
+                self.neighbors_info,
+            ),
+        )
+
+        self.sync_thread.daemon = True
+        self.sync_thread.name = "Sync-Thread"
+        self.sync_thread.start()
+        self.gossiped_dist_model_flag.clear()
+        self.updated_local_model_flag.clear()
+        self.n_bits = torch.FloatTensor([0])
+
+        # put something to the shared memory.
+        self.sync_queue.put((self.conf, self.param_groups, self.n_bits))
+
+    def __setstate__(self, state):
+        super(ParallelCHOCO, self).__setstate__(state)
+        for group in self.param_groups:
+            group.setdefault("nesterov", False)
+
+    @staticmethod
+    def _sync_thread_func(
+        gossiped_dist_model_flag,
+        updated_local_model_flag,
+        sync_queue,
+        param_names,
+        timer,
+        neighbors_info,
+    ):
+        # some utility function.
+        def _init_neighbor_hat_params(conf, param_groups, param_names):
+            params, params_shapes = comm.get_data(
+                param_groups, param_names, is_get_grad=False
+            )
+            flatten_params = TensorBuffer(params)
+            flatten_params.buffer = torch.zeros_like(flatten_params.buffer)
+
+            # init the neighbor_params.
+            return (
+                {
+                    conf.graph.rank: deepcopy(flatten_params),
+                    "memory": deepcopy(flatten_params),
+                },
+                params_shapes,
+            )
+
+        # initialization.
+        conf, param_groups, n_bits = sync_queue.get()
+        neighbor_hat_params, params_shapes = _init_neighbor_hat_params(
+            conf, param_groups, param_names
+        )
+
+        # init the distributed world again.
+        try:
+            dist.init_process_group("mpi")
+        except RuntimeError as e:
+            print(f"error: {e}")
+
+        # define aggregator and compressor.
+        # conf.graph._make_process_group()
+        aggregator = comm.get_aggregators(
+            cur_rank=conf.graph.rank,
+            world=conf.graph.ranks,
+            neighbors_info=neighbors_info,
+            aggregator_type="decentralized",
+            graph=conf.graph,
+        )
+        compressor = CHOCOCompressor(
+            aggregator=aggregator,
             comm_op=conf.comm_op,
-            comm_device=self.conf.comm_device,
+            comm_device=conf.comm_device,
             compress_ratio=conf.compress_ratio,
             quantize_level=conf.quantize_level,
             is_biased=conf.is_biased,
@@ -78,81 +150,61 @@ class ParallelCHOCO(Optimizer):
             use_ipc=conf.use_ipc,
         )
 
-        # define auxilary functions.
-        self.helper_thread = None
-        self.sync_buffer = {}
-        self.n_bits = 0
+        # formal infinity loop.
+        while True:
+            if updated_local_model_flag.is_set():
+                updated_local_model_flag.clear()
 
-    def init_neighbor_hat_params(self):
-        params, self.shapes = comm.get_data(
-            self.param_groups, self.param_names, is_get_grad=False
-        )
-        flatten_params = TensorBuffer(params)
-        flatten_params.buffer = torch.zeros_like(flatten_params.buffer)
+                # recover current params and hat_params
+                params, flatten_params, flatten_hat_params = utils.recover_params(
+                    param_groups=param_groups,
+                    param_names=param_names,
+                    rank=conf.graph.rank,
+                    neighbor_hat_params=neighbor_hat_params,
+                    get_hat_params=True,
+                )
+                # get updated flatten params.
+                utils.update_params_from_neighbor(
+                    neighbor_hat_params=neighbor_hat_params,
+                    flatten_params=flatten_params,
+                    consensus_stepsize=conf.consensus_stepsize,
+                    self_rank=conf.graph.rank,
+                )
+                # update the local model using neighborhood info.
+                flatten_params.unpack(params)
+                gossiped_dist_model_flag.set()
 
-        # init the neighbor_params.
-        self.neighbor_hat_params = {
-            self.rank: deepcopy(flatten_params),
-            "memory": deepcopy(flatten_params),
-        }
-
-    def __setstate__(self, state):
-        super(ParallelCHOCO, self).__setstate__(state)
-        for group in self.param_groups:
-            group.setdefault("nesterov", False)
+                # start compress/sync.
+                sync_buffer = {
+                    "original_shapes": params_shapes,
+                    "flatten_params": flatten_params,
+                    "flatten_hat_params": flatten_hat_params,
+                }
+                compressor.pipeline(
+                    sync_buffer=sync_buffer,
+                    neighbor_hat_params=neighbor_hat_params,
+                    neighbors_info=neighbors_info,
+                )
+                n_bits.data[0] = sync_buffer["n_bits"]
 
     def step(self, closure=None, **kargs):
-        # Apply the gradients with the weight decay and momentum.
         with kargs["timer"]("sync.apply_grad", epoch=self.conf.epoch_):
+            # Apply the gradients with the weight decay and momentum.
             utils.apply_gradient(
                 self.param_groups, self.state, apply_grad_to_model=True
             )
+            self.updated_local_model_flag.set()
 
-        with kargs["timer"]("sync.finish_sync", epoch=self.conf.epoch_):
-            utils.join_thread(self.helper_thread)
-            self.n_bits = self.sync_buffer.get("n_bits", 0)
+        with kargs["timer"]("sync.gossip_model", epoch=self.conf.epoch_):
+            while not self.gossiped_dist_model_flag.is_set():
+                pass
+            self.gossiped_dist_model_flag.clear()
+        return self.n_bits.item()
 
-        # recover current params and hat_params
-        with kargs["timer"]("sync.recover_hat_params", epoch=self.conf.epoch_):
-            params, flatten_params, flatten_hat_params = utils.recover_params(
-                param_groups=self.param_groups,
-                param_names=self.param_names,
-                rank=self.rank,
-                neighbor_hat_params=self.neighbor_hat_params,
-                get_hat_params=True,
-            )
-        # get updated flatten params.
-        with kargs["timer"]("sync.update_flatten_params", epoch=self.conf.epoch_):
-            utils.update_params_from_neighbor(
-                neighbor_hat_params=self.neighbor_hat_params,
-                flatten_params=flatten_params,
-                consenus_stepsize=self.consenus_stepsize,
-                self_rank=self.rank,
-            )
-        # update the local model.
-        with kargs["timer"]("sync.update_local_model", epoch=self.conf.epoch_):
-            flatten_params.unpack(params)
-
-        # start compress/sync.
-        with kargs["timer"]("sync.start_sync", epoch=self.conf.epoch_):
-            self.sync_buffer = {
-                "original_shapes": self.shapes,
-                "flatten_params": flatten_params,
-                "flatten_hat_params": flatten_hat_params,
-            }
-
-            self.helper_thread = utils.HelperThread(
-                name=f"_thread_at_epoch_{self.conf.epoch_}.compress",
-                func=self.compressor.pipeline,
-                # the arguments below will be feeded into the `func`.
-                sync_buffer=self.sync_buffer,
-                neighbor_hat_params=self.neighbor_hat_params,
-                neighbors_info=self.neighbors_info,
-            )
-            self.helper_thread.start()
-            if self.conf.epoch_ % 1 == 0:
-                utils.join_thread(self.helper_thread)
-        return self.n_bits
+    def __del__(self):
+        self.sync_queue.close()
+        self.sync_thread.terminate()
+        self.sync_thread.join()
 
 
 """the entry for CHOCOCompressor."""
@@ -222,7 +274,8 @@ class CHOCOSparsificationCompressor(object):
             try:
                 self.compress(sync_buffer)
                 self.sync(sync_buffer)
-                self.uncompress(sync_buffer, neighbor_hat_params, neighbors_info)
+                self.uncompress(
+                    sync_buffer, neighbor_hat_params, neighbors_info)
             except RuntimeError as e:
                 print("Error: {}".format(e))
 
@@ -368,7 +421,8 @@ class CHOCOQuantizationCompressor(object):
             try:
                 self.compress(sync_buffer)
                 self.sync(sync_buffer)
-                self.uncompress(sync_buffer, neighbor_hat_params, neighbors_info)
+                self.uncompress(
+                    sync_buffer, neighbor_hat_params, neighbors_info)
             except RuntimeError as e:
                 print("Error: {}".format(e))
 
@@ -469,7 +523,8 @@ class CHOCOSignCompressor(object):
             try:
                 self.compress(sync_buffer)
                 self.sync(sync_buffer)
-                self.uncompress(sync_buffer, neighbor_hat_params, neighbors_info)
+                self.uncompress(
+                    sync_buffer, neighbor_hat_params, neighbors_info)
             except RuntimeError as e:
                 print("Error: {}".format(e))
 
@@ -486,7 +541,8 @@ class CHOCOSignCompressor(object):
         # flatten selected values/indices.
         flatten_norms = TensorBuffer(norms)
         flatten_directions = TensorBuffer(updates)
-        signs, sign_size = self.compressor_fn.compress(flatten_directions.buffer)
+        signs, sign_size = self.compressor_fn.compress(
+            flatten_directions.buffer)
 
         # get n_bits to transmit.
         n_bits = get_n_bits(flatten_norms.buffer) + get_n_bits(signs)
@@ -535,10 +591,13 @@ class CHOCOSignCompressor(object):
 
             # recover the message and the corresponding device.
             sync_buffer["flatten_norms"].buffer = comm.recover_device(
-                sync_buffer["synced_flatten_norms"][rank], device=hat_params.buffer.device
+                sync_buffer["synced_flatten_norms"][rank],
+                device=hat_params.buffer.device,
             )
             sync_buffer["flatten_directions"].buffer = self.compressor_fn.uncompress(
-                comm.recover_device(sync_buffer["synced_signs"][rank], device=hat_params.buffer.device),
+                comm.recover_device(
+                    sync_buffer["synced_signs"][rank], device=hat_params.buffer.device
+                ),
                 sync_buffer["sign_size"],
             )
 

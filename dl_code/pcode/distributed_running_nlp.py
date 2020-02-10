@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-from copy import deepcopy
-
 import numpy as np
 import torch
 
@@ -11,8 +9,6 @@ from pcode.utils.logging import (
     dispaly_best_test_stat,
 )
 from pcode.utils.stat_tracker import RuntimeTracker
-from pcode.utils.timer import Timer
-from pcode.utils.auxiliary import get_model_difference
 import pcode.utils.error_handler as error_handler
 from pcode.create_dataset import load_data_batch
 
@@ -28,11 +24,8 @@ def train_and_validate(
     # define runtime stat tracker and start the training.
     tracker_tr = RuntimeTracker(metrics_to_track=metrics.metric_names)
 
-    # define the timer for different operations.
-    timer = Timer(
-        verbosity_level=1 if conf.track_time and not conf.train_fast else 0,
-        log_fn=conf.logger.log_metric,
-    )
+    # get the timer.
+    timer = conf.timer
 
     # break until finish expected full epoch training.
     print("=>>>> enter the training.\n")
@@ -47,7 +40,6 @@ def train_and_validate(
         # configure local step.
         for batch in data_loader["train_loader"]:
             model.train()
-            scheduler.step(optimizer)
 
             # repackage the hidden.
             _hidden = (
@@ -93,6 +85,7 @@ def train_and_validate(
                 # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
                 torch.nn.utils.clip_grad_norm_(model.parameters(), conf.rnn_clip)
                 n_bits_to_transmit = optimizer.step(timer=timer)
+                scheduler.step()
 
             # display the logging info.
             display_training_stat(conf, scheduler, tracker_tr, n_bits_to_transmit)
@@ -167,7 +160,16 @@ def do_validate(conf, model, optimizer, criterion, scheduler, metrics, data_load
     print("Finished validation.")
 
 
-def validate(conf, model, optimizer, criterion, scheduler, metrics, data_loader):
+def validate(
+    conf,
+    model,
+    optimizer,
+    criterion,
+    scheduler,
+    metrics,
+    data_loader,
+    label="local_model",
+):
     """A function for model evaluation."""
 
     def _evaluate(_model, label):
@@ -214,27 +216,6 @@ def validate(conf, model, optimizer, criterion, scheduler, metrics, data_loader)
         global_performance = tracker_te.evaluate_global_metrics()
         return global_performance
 
-    # # evaluate the averaged local model on the validation dataset.
-    # if (
-    #     conf.graph_topology != "complete"
-    #     and conf.graph_topology != "data_center"
-    #     and not conf.train_fast
-    # ):
-    #     copied_model = deepcopy(model)
-    #     optimizer.world_aggregator.agg_model(copied_model, op="avg")
-    #     _evaluate(copied_model, label="averaged_model")
-
-    #     # get the l2 distance of the local model to the averaged model
-    #     conf.logger.log_metric(
-    #         name="stat",
-    #         values={
-    #             "rank": conf.graph.rank,
-    #             "epoch": scheduler.epoch_,
-    #             "distance": get_model_difference(model, copied_model),
-    #         },
-    #         tags={"split": "test", "type": "averaged_model"},
-    #     )
-
     # evaluate each local model on the validation dataset.
-    global_performance = _evaluate(model, label="local_model")
+    global_performance = _evaluate(model, label=label)
     return global_performance

@@ -65,9 +65,9 @@ def recover_params(
 
 
 def update_params_from_neighbor(
-    neighbor_hat_params, flatten_params, consenus_stepsize, self_rank
+    neighbor_hat_params, flatten_params, consensus_stepsize, self_rank
 ):
-    flatten_params.buffer += consenus_stepsize * (
+    flatten_params.buffer += consensus_stepsize * (
         neighbor_hat_params["memory"].buffer - neighbor_hat_params[self_rank].buffer
     )
 

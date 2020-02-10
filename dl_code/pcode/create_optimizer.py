@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 from pcode.optim.sgd import SGD
 
+from pcode.optim.sign_sgd import SignSGD
+from pcode.optim.ef_sign_sgd import EF_SignSGD
+
 from pcode.optim.dgc import DGC
 from pcode.optim.parallel_choco import ParallelCHOCO
-
 from pcode.optim.dcd_psgd import DCD_PSGD
 from pcode.optim.ecd_psgd import ECD_PSGD
+from pcode.optim.deep_squeeze import DeepSqueeze
 
 
 def define_optimizer(conf, model):
@@ -26,19 +29,26 @@ def define_optimizer(conf, model):
         optim_class = SGD
     elif conf.optimizer == "dgc":
         optim_class = DGC
+    elif conf.optimizer == "sign_sgd":
+        optim_class = SignSGD
+    elif conf.optimizer == "ef_sign_sgd":
+        optim_class = EF_SignSGD
     elif conf.optimizer == "dcd_psgd":
         optim_class = DCD_PSGD
     elif conf.optimizer == "ecd_psgd":
         optim_class = ECD_PSGD
     elif conf.optimizer == "parallel_choco":
         optim_class = ParallelCHOCO
+    elif conf.optimizer == "deep_squeeze":
+        optim_class = DeepSqueeze
     else:
         raise NotImplementedError
 
-    return optim_class(
+    optimizer = optim_class(
         params,
-        lr=conf.learning_rate,
+        lr=conf.lr,
         momentum=conf.momentum_factor,
         nesterov=conf.use_nesterov,
         conf=conf,
     )
+    return optimizer

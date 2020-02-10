@@ -80,16 +80,19 @@ class AverageMeter(object):
 class RuntimeTracker(object):
     """Tracking the runtime stat for local training."""
 
-    def __init__(self, metrics_to_track=["top1"]):
+    def __init__(self, metrics_to_track=["top1"], on_cuda=True):
         self.metrics_to_track = metrics_to_track
         self.things_to_track = ["loss"] + metrics_to_track
+        self.on_cuda = on_cuda
         self.reset()
 
     def reset(self):
         self.stat = dict((name, AverageMeter()) for name in self.things_to_track)
 
     def evaluate_global_metric(self, metric):
-        return global_average(self.stat[metric].sum, self.stat[metric].count).item()
+        return global_average(
+            self.stat[metric].sum, self.stat[metric].count, on_cuda=self.on_cuda
+        ).item()
 
     def evaluate_global_metrics(self):
         return [self.evaluate_global_metric(metric) for metric in self.metrics_to_track]

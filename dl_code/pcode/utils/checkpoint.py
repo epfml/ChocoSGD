@@ -6,6 +6,7 @@ from os.path import join, isfile
 
 import torch
 
+import pcode.utils.logging as logging
 from pcode.utils.op_paths import build_dirs, remove_folder
 from pcode.utils.op_files import write_pickle
 
@@ -33,9 +34,7 @@ def get_checkpoint_folder_name(conf):
 
     # get optimizer info.
     if "choco" in conf.optimizer:
-        optim_info = "{}-stepsize-{}".format(
-            conf.optimizer, conf.choco_consenus_stepsize
-        )
+        optim_info = "{}-stepsize-{}".format(conf.optimizer, conf.consensus_stepsize)
     else:
         optim_info = "{}".format(conf.optimizer)
 
@@ -105,7 +104,7 @@ def save_to_checkpoint(conf, state, is_best, dirname, filename, save_all=False):
             )
 
 
-def maybe_resume_from_checkpoint(conf, model, optimizer):
+def maybe_resume_from_checkpoint(conf, model, optimizer, scheduler):
     if conf.resume:
         if conf.checkpoint_index is not None:
             # reload model from a specific checkpoint index.
@@ -129,11 +128,13 @@ def maybe_resume_from_checkpoint(conf, model, optimizer):
             checkpoint = torch.load(checkpoint_path, map_location="cpu")
 
             # restore some run-time info.
-            conf.local_index = checkpoint["local_index"]
-            conf.best_perf = checkpoint["best_perf"]
+            scheduler.update_from_checkpoint(checkpoint)
 
             # reset path for log.
-            remove_folder(conf.checkpoint_root)
+            try:
+                remove_folder(conf.checkpoint_root)
+            except RuntimeError as e:
+                print(f"ignore the error={e}")
             conf.checkpoint_root = conf.resume
             conf.checkpoint_dir = join(conf.resume, str(conf.graph.rank))
             # restore model.
@@ -146,6 +147,8 @@ def maybe_resume_from_checkpoint(conf, model, optimizer):
                     conf.resume, checkpoint["current_epoch"]
                 )
             )
+            # configure logger.
+            conf.logger = logging.Logger(conf.checkpoint_dir)
 
             # try to solve memory issue.
             del checkpoint

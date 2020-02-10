@@ -20,11 +20,11 @@ class Timer:
     ... print(timer.summary())
     """
 
-    def __init__(self, verbosity_level=1, log_fn=None, skip_first=True):
+    def __init__(self, verbosity_level=1, log_fn=None, skip_first=True, on_cuda=True):
         self.verbosity_level = verbosity_level
         self.log_fn = log_fn if log_fn is not None else self._default_log_fn
         self.skip_first = skip_first
-        self.cuda_available = torch.cuda.is_available()
+        self.cuda_available = torch.cuda.is_available() and on_cuda
 
         self.reset()
 

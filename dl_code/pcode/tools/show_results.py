@@ -88,18 +88,29 @@ def _get_info_from_the_folder(folder_path):
         {
             "arguments": _get_arguments(load_pickle(arguments_path)),
             # single worker records.
-            "single_records": _parse_runtime_info(
-                os.path.join(sub_folder_paths[0], "log.json")
-            ),
-            # records w.r.t. averaged model
-            "averaged_records": _parse_averaged_info(
-                [
-                    os.path.join(sub_folder_path, "log.json")
-                    for sub_folder_path in sub_folder_paths
-                ]
-            ),
+            "single_records": _parse_runtime_infos(os.path.join(sub_folder_paths[0])),
         },
     )
+
+
+def _parse_runtime_infos(file_folder):
+    existing_json_files = [file for file in os.listdir(file_folder) if "json" in file]
+
+    if "log.json" in existing_json_files:
+        # old logging scheme.
+        return _parse_runtime_info(os.path.join(file_folder, "log.json"))
+    else:
+        # new logging scheme.
+        lines = []
+        for idx in range(1, 1 + len(existing_json_files)):
+            _lines = _parse_runtime_info(
+                os.path.join(file_folder, "log-{}.json".format(idx))
+            )
+            lines.append(_lines)
+
+        return functools.reduce(
+            lambda a, b: [a[idx] + b[idx] for idx in range(len(a))], lines
+        )
 
 
 def _parse_runtime_info(json_file_path):
@@ -107,7 +118,7 @@ def _parse_runtime_info(json_file_path):
         lines = json.load(json_file)
 
         # distinguish lines to different types.
-        tr_lines, te_lines = [], []
+        tr_lines, te_lines, te_avg_lines = [], [], []
 
         for line in lines:
             if line["measurement"] != "runtime":
@@ -121,26 +132,12 @@ def _parse_runtime_info(json_file_path):
 
             if line["split"] == "train":
                 tr_lines.append(line)
-            elif line["split"] == "test" and line["type"] == "local_model":
-                te_lines.append(line)
-    return tr_lines, te_lines
-
-
-def _parse_averaged_info(json_file_paths):
-    averaged_info = []
-
-    for json_file_path in json_file_paths:
-        with open(json_file_path) as json_file:
-            lines = json.load(json_file)
-
-            _valid_lines = []
-            for line in lines:
-                if "type" not in line:
-                    continue
-                if line["type"] == "averaged_model":
-                    _valid_lines.append(line)
-            averaged_info.append(_valid_lines)
-    return averaged_info
+            elif line["split"] == "test":
+                if line["type"] == "local_model":
+                    te_lines.append(line)
+                elif line["type"] == "local_model_avg":
+                    te_avg_lines.append(line)
+    return tr_lines, te_lines, te_avg_lines
 
 
 """extract the results based on the condition."""
@@ -202,37 +199,8 @@ def reorganize_records(records):
             bits.append(line["n_bits_to_transmit"] if is_train else 0)
         return time, step, loss, top1, top5, ppl, bits
 
-    # deal with averaged records (only exist for test with decentralized case).
-    list_of_te_records = records["averaged_records"]
-    list_of_te_loss, list_of_te_top1, list_of_te_top5, list_of_te_ppl, list_of_te_distance = (
-        [],
-        [],
-        [],
-        [],
-        [],
-    )
-
-    for _te_records in list_of_te_records:
-        _runtime_records = [
-            record for record in _te_records if record["measurement"] == "runtime"
-        ]
-        _stat_records = [
-            record for record in _te_records if record["measurement"] == "stat"
-        ]
-
-        # get info.
-        _, _, _te_loss, _te_top1, _te_top5, _te_ppl, _ = _parse(
-            _runtime_records, is_train=False
-        )
-        te_distance = [_record["distance"] for _record in _stat_records]
-        list_of_te_loss.append(_te_loss)
-        list_of_te_top1.append(_te_top1)
-        list_of_te_top5.append(_te_top5)
-        list_of_te_ppl.append(_te_ppl)
-        list_of_te_distance.append(te_distance)
-
     # deal with single records.
-    tr_records, te_records = records["single_records"]
+    tr_records, te_records, te_avg_records = records["single_records"]
     te_records = [record for record in te_records]
     tr_time, tr_step, tr_loss, tr_top1, tr_top5, tr_ppl, tr_MB = _parse(
         tr_records, is_train=True
@@ -240,6 +208,7 @@ def reorganize_records(records):
     te_time, te_epoch, te_loss, te_top1, te_top5, te_ppl, _ = _parse(
         te_records, is_train=False
     )
+    te_avg_perf = [0] + [record["best_perf"] for record in te_avg_records]
 
     # return all results.
     return {
@@ -253,15 +222,15 @@ def reorganize_records(records):
         "te_step": te_epoch,
         "te_loss": te_loss,
         "te_top1": te_top1,
+        "te_top1_upon": [max(te_top1[:idx]) for idx in range(1, 1 + len(te_top1))],
         "te_top5": te_top5,
+        "te_top5_upon": [max(te_top5[:idx]) for idx in range(1, 1 + len(te_top5))],
         "te_ppl": te_ppl,
-        "avg_te_loss": list(map(lambda x: sum(x) / len(x), zip(*list_of_te_loss))),
-        "avg_te_top1": list(map(lambda x: sum(x) / len(x), zip(*list_of_te_top1))),
-        "avg_te_top5": list(map(lambda x: sum(x) / len(x), zip(*list_of_te_top5))),
-        "avg_te_ppl": list(map(lambda x: sum(x) / len(x), zip(*list_of_te_ppl))),
-        "avg_te_distance": list(
-            map(lambda x: sum(x) / len(x), zip(*list_of_te_distance))
-        ),
+        "te_ppl_upon": [max(te_ppl[:idx]) for idx in range(1, 1 + len(te_ppl))],
+        "te_avg_perf": te_avg_perf,
+        "te_avg_perf_upon": [
+            max(te_avg_perf[:idx]) for idx in range(1, 1 + len(te_avg_perf))
+        ],
     }
 
 

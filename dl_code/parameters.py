@@ -69,33 +69,21 @@ def get_args():
 
     # learning rate scheme
     parser.add_argument("--lr", type=float, default=0.01)
-    parser.add_argument("--lr_schedule_scheme", type=str, default=None)
-
-    parser.add_argument("--lr_change_epochs", type=str, default=None)
-    parser.add_argument("--lr_fields", type=str, default=None)
-    parser.add_argument("--lr_scale_indicators", type=str, default=None)
-
-    parser.add_argument("--lr_scaleup", type=str2bool, default=False)
-    parser.add_argument("--lr_scaleup_type", type=str, default="linear")
     parser.add_argument(
-        "--lr_scaleup_factor",
+        "--lr_scheduler",
         type=str,
-        default="graph",
-        choices=["graph", "world"],
-        help="scale by the graph connection, or the world size",
+        default="MultiStepLR",
+        choices=["MultiStepLR", "ExponentialLR", "ReduceLROnPlateau"],
     )
+    parser.add_argument("--lr_milestones", type=str, default=None)
+    parser.add_argument("--lr_decay", type=float, default=0.1)
+    parser.add_argument("--lr_patience", type=int, default=10)
+    parser.add_argument("--lr_scaleup", type=str2bool, default=False)
+    parser.add_argument("--lr_scaleup_init_lr", type=float, default=None)
+    parser.add_argument("--lr_scaleup_factor", type=str, default=None)
     parser.add_argument("--lr_warmup", type=str2bool, default=False)
-    parser.add_argument("--lr_warmup_epochs", type=int, default=5)
-    parser.add_argument("--lr_decay", type=float, default=10)
-
-    parser.add_argument("--lr_onecycle_low", type=float, default=0.15)
-    parser.add_argument("--lr_onecycle_high", type=float, default=3)
-    parser.add_argument("--lr_onecycle_extra_low", type=float, default=0.0015)
-    parser.add_argument("--lr_onecycle_num_epoch", type=int, default=46)
-
-    parser.add_argument("--lr_gamma", type=float, default=None)
-    parser.add_argument("--lr_mu", type=float, default=None)
-    parser.add_argument("--lr_alpha", type=float, default=None)
+    parser.add_argument("--lr_warmup_epochs", type=int, default=None)
+    parser.add_argument("--lr_warmup_epochs_upper_bound", type=int, default=150)
 
     # optimizer
     parser.add_argument("--optimizer", type=str, default="sgd")
@@ -122,12 +110,18 @@ def get_args():
     parser.add_argument("--compress_warmup_epochs", default=0, type=int)
     parser.add_argument("--quantize_level", default=None, type=int)
     parser.add_argument("--is_biased", default=False, type=str2bool)
+    parser.add_argument("--majority_vote", default=False, type=str2bool)
 
-    parser.add_argument("--choco_consenus_stepsize", default=0.9, type=float)
+    parser.add_argument("--consensus_stepsize", default=0.9, type=float)
+    parser.add_argument("--evaluate_consensus", default=False, type=str2bool)
 
     parser.add_argument("--mask_momentum", default=False, type=str2bool)
     parser.add_argument("--clip_grad", default=False, type=str2bool)
     parser.add_argument("--clip_grad_val", default=None, type=float)
+
+    parser.add_argument("--local_step", default=1, type=int)
+    parser.add_argument("--turn_on_local_step_from", default=0, type=int)
+    parser.add_argument("--local_adam_memory_treatment", default=None, type=str)
 
     # momentum scheme
     parser.add_argument("--momentum_factor", default=0.9, type=float)
@@ -164,13 +158,11 @@ def get_args():
         default=False,
         help="evaluate model on validation set",
     )
-    parser.add_argument("--eval_freq", default=1, type=int)
     parser.add_argument("--summary_freq", default=100, type=int)
     parser.add_argument("--timestamp", default=None, type=str)
     parser.add_argument("--track_time", default=False, type=str2bool)
     parser.add_argument("--track_detailed_time", default=False, type=str2bool)
     parser.add_argument("--display_tracked_time", default=False, type=str2bool)
-    parser.add_argument("--evaluate_avg", default=False, type=str2bool)
 
     # checkpoint
     parser.add_argument("--resume", default=None, type=str)

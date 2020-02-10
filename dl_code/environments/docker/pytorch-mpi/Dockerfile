@@ -23,7 +23,7 @@ RUN $HOME/conda/bin/conda update -n base conda
 RUN $HOME/conda/bin/conda create -y --name pytorch-py$PYTHON_VERSION python=$PYTHON_VERSION numpy pyyaml scipy ipython mkl mkl-include
 RUN $HOME/conda/bin/conda install --name pytorch-py$PYTHON_VERSION -c soumith magma-cuda100
 RUN $HOME/conda/bin/conda install --name pytorch-py$PYTHON_VERSION scikit-learn
-RUN $HOME/conda/envs/pytorch-py3.6/bin/pip install pytelegraf pymongo influxdb kubernetes jinja2
+RUN $HOME/conda/envs/pytorch-py$PYTHON_VERSION/bin/pip install pytelegraf pymongo influxdb kubernetes jinja2
 ENV PATH $HOME/conda/envs/pytorch-py$PYTHON_VERSION/bin:$PATH
 
 # install pytorch, torchvision, torchtext.
@@ -33,18 +33,23 @@ RUN cd pytorch && \
     TORCH_CUDA_ARCH_LIST="3.5 3.7 5.2 6.0 6.1 7.0+PTX" TORCH_NVCC_FLAGS="-Xfatbin -compress-all" \
     CMAKE_PREFIX_PATH="$(dirname $(which $HOME/conda/bin/conda))/../" \
     pip install -v .
-RUN git clone https://github.com/pytorch/vision.git && cd vision && pip install -v .
-RUN $HOME/conda/envs/pytorch-py3.6/bin/pip install --upgrade git+https://github.com/pytorch/text
-RUN $HOME/conda/envs/pytorch-py3.6/bin/pip install spacy
-RUN $HOME/conda/envs/pytorch-py3.6/bin/python -m spacy download en
+RUN git clone https://github.com/pytorch/vision.git && cd vision && git checkout v0.4.0 && python setup.py install
+RUN $HOME/conda/envs/pytorch-py$PYTHON_VERSION/bin/pip install --upgrade git+https://github.com/pytorch/text
+RUN $HOME/conda/envs/pytorch-py$PYTHON_VERSION/bin/pip install spacy
+RUN $HOME/conda/envs/pytorch-py$PYTHON_VERSION/bin/python -m spacy download en
+RUN $HOME/conda/envs/pytorch-py$PYTHON_VERSION/bin/python -m spacy download de
+
 
 # install bit2byte.
 RUN git clone https://github.com/tvogels/signSGD-with-Majority-Vote.git && \
     cd signSGD-with-Majority-Vote/main/bit2byte-extension/ && \
-    $HOME/conda/envs/pytorch-py3.6/bin/python setup.py develop --user
+    $HOME/conda/envs/pytorch-py$PYTHON_VERSION/bin/python setup.py develop --user
 
 # install other python related softwares.
 RUN $HOME/conda/bin/conda install --name pytorch-py$PYTHON_VERSION -y opencv protobuf
 RUN $HOME/conda/bin/conda install --name pytorch-py$PYTHON_VERSION -y networkx
-RUN $HOME/conda/envs/pytorch-py3.6/bin/pip install lmdb tensorboard_logger pyarrow msgpack msgpack_numpy mpi4py
+RUN $HOME/conda/bin/conda install --name pytorch-py$PYTHON_VERSION -y -c anaconda pandas
+RUN $HOME/conda/bin/conda install --name pytorch-py$PYTHON_VERSION -y -c conda-forge tabulate
+RUN $HOME/conda/envs/pytorch-py$PYTHON_VERSION/bin/pip install lmdb tensorboard_logger pyarrow msgpack msgpack_numpy mpi4py
 RUN $HOME/conda/bin/conda install --name pytorch-py$PYTHON_VERSION -c conda-forge python-blosc
+RUN $HOME/conda/bin/conda clean -ya
