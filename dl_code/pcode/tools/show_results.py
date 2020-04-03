@@ -5,7 +5,7 @@ import json
 import functools
 import numbers
 import pandas as pd
-
+from collections import defaultdict
 
 from pcode.utils.op_paths import list_files
 from pcode.utils.op_files import load_pickle
@@ -17,15 +17,11 @@ from pcode.utils.auxiliary import str2time
 
 def _get_arguments(arguments):
     arguments = vars(arguments)
-
     arguments.update(
         {
-            "n_nodes": arguments["graph"].n_nodes,
-            "world": arguments["graph"].world,
-            "rank": arguments["graph"].rank,
-            "ranks": arguments["graph"].ranks,
-            "device": arguments["graph"].device,
-            "on_cuda": arguments["graph"].on_cuda,
+            "n_nodes": arguments["n_nodes"]
+            if "n_nodes" in arguments
+            else arguments["graph"].n_nodes
         }
     )
     arguments["graph"] = None
@@ -89,6 +85,11 @@ def _get_info_from_the_folder(folder_path):
             "arguments": _get_arguments(load_pickle(arguments_path)),
             # single worker records.
             "single_records": _parse_runtime_infos(os.path.join(sub_folder_paths[0])),
+            # multiple workers records.
+            "multi_records": [
+                _parse_runtime_infos(os.path.join(sub_folder_path))
+                for sub_folder_path in sub_folder_paths
+            ],
         },
     )
 
@@ -234,7 +235,88 @@ def reorganize_records(records):
     }
 
 
-def extract_list_of_records(list_of_records, conditions):
+def reorganize_multi_records(records):
+    def _parse(lines, is_train=True):
+        time, step, loss, top1, top5, ppl, bits = [], [], [], [], [], [], []
+
+        for line in lines:
+            time.append(line["time"])
+            step.append(line["local_index"] if is_train else line["epoch"])
+            loss.append(line["loss"])
+            top1.append(line["top1"] if "top1" in line else 0)
+            top5.append(line["top5"] if "top5" in line else 0)
+            ppl.append(line["ppl"] if "ppl" in line else 0)
+            bits.append(line["n_bits_to_transmit"] if is_train else 0)
+        return time, step, loss, top1, top5, ppl, bits
+
+    # deal with multiple records.
+    info = defaultdict(list)
+    for _multi_records in records["multi_records"]:
+        _tr_records, _te_records, _te_avg_records = _multi_records
+        _te_records = [_record for _record in _te_records]
+        tr_time, tr_step, _tr_loss, _tr_top1, _tr_top5, _tr_ppl, _tr_MB = _parse(
+            _tr_records, is_train=True
+        )
+        te_time, te_epoch, _te_loss, _te_top1, _te_top5, _te_ppl, _ = _parse(
+            _te_records, is_train=False
+        )
+        _te_avg_perf = [0] + [_record["best_perf"] for _record in _te_avg_records]
+
+        # append.
+        info["tr_loss"].append(_tr_loss)
+        info["tr_top1"].append(_tr_top1)
+        info["tr_top5"].append(_tr_top5)
+        info["tr_ppl"].append(_tr_ppl)
+        info["tr_MB"].append(_tr_MB)
+
+        info["te_loss"].append(_te_loss)
+        info["te_top1"].append(_te_top1)
+        info["te_top5"].append(_te_top5)
+        info["te_ppl"].append(_te_ppl)
+        info["te_avg_perf"].append(_te_avg_perf)
+
+    def mean(a):
+        return sum(a) / len(a)
+
+    tr_loss = list(map(mean, zip(*info["tr_loss"])))
+    tr_top1 = list(map(mean, zip(*info["tr_top1"])))
+    tr_top5 = list(map(mean, zip(*info["tr_top5"])))
+    tr_ppl = list(map(mean, zip(*info["tr_ppl"])))
+    tr_MB = list(map(mean, zip(*info["tr_MB"])))
+
+    te_loss = list(map(mean, zip(*info["te_loss"])))
+    te_top1 = list(map(mean, zip(*info["te_top1"])))
+    te_top5 = list(map(mean, zip(*info["te_top5"])))
+    te_ppl = list(map(mean, zip(*info["te_ppl"])))
+    te_avg_perf = list(map(mean, zip(*info["te_avg_perf"])))
+
+    # return all results.
+    return {
+        "tr_time": tr_time,
+        "tr_MB": tr_MB,
+        "tr_loss": tr_loss,
+        "tr_top1": tr_top1,
+        "tr_top5": tr_top5,
+        "tr_ppl": tr_ppl,
+        "te_time": te_time,
+        "te_step": te_epoch,
+        "te_loss": te_loss,
+        "te_top1": te_top1,
+        "te_top1_upon": [max(te_top1[:idx]) for idx in range(1, 1 + len(te_top1))],
+        "te_top5": te_top5,
+        "te_top5_upon": [max(te_top5[:idx]) for idx in range(1, 1 + len(te_top5))],
+        "te_ppl": te_ppl,
+        "te_ppl_upon": [max(te_ppl[:idx]) for idx in range(1, 1 + len(te_ppl))],
+        "te_avg_perf": te_avg_perf,
+        "te_avg_perf_upon": [
+            max(te_avg_perf[:idx]) for idx in range(1, 1 + len(te_avg_perf))
+        ],
+    }
+
+
+def extract_list_of_records(
+    list_of_records, conditions, reorganize_records_fn="reorganize_records"
+):
     # load and filter data.
     records = []
 
@@ -244,7 +326,9 @@ def extract_list_of_records(list_of_records, conditions):
             continue
 
         # get parsed records
-        records += [(raw_records["arguments"], reorganize_records(raw_records))]
+        records += [
+            (raw_records["arguments"], eval(reorganize_records_fn)(raw_records))
+        ]
 
     print("we have {}/{} records.".format(len(records), len(list_of_records)))
     return records

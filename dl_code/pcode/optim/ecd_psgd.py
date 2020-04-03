@@ -129,7 +129,7 @@ class ECD_PSGD(Optimizer):
         # get updated local model (flatten params).
         with kargs["timer"]("grad.unflatten_to_update", epoch=self.conf.epoch_):
             flatten_updated_params.buffer.add_(
-                -self.param_groups[0]["lr"], flatten_grads.buffer
+                flatten_grads.buffer, alpha=-self.param_groups[0]["lr"]
             )
             flatten_updated_params.unpack(params)
 
@@ -356,7 +356,9 @@ class ECDQuantizationCompressor(object):
             )
 
             # update the flatten hat params.
-            hat_params.buffer.mul_(1 - 2 / local_index).add_(2 / local_index, _message)
+            hat_params.buffer.mul_(1 - 2 / local_index).add_(
+                _message, alpha=2 / local_index
+            )
 
 
 class ECDSignCompressor(object):

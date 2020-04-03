@@ -303,7 +303,7 @@ class DGC(Optimizer):
 
                 # add the weight decay.
                 if weight_decay != 0:
-                    d_p.add_(weight_decay, p.data)
+                    d_p.add_(p.data, alpha=weight_decay)
 
                 # clip the gradient.
                 if self.clip_grad:
@@ -316,7 +316,7 @@ class DGC(Optimizer):
                         buf.add_(d_p)
                     else:
                         buf = param_state["momentum_buffer"]
-                        buf.mul_(momentum).add_(1 - dampening, d_p)
+                        buf.mul_(momentum).add_(d_p, alpha=1 - dampening)
                     if nesterov:
                         d_p = d_p.add(momentum, buf)
                     else:

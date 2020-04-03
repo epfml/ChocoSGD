@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
+from copy import deepcopy
+
 import numpy as np
 import torch
 
-from pcode.create_dataset import load_data_batch
 from pcode.utils.checkpoint import save_to_checkpoint
 from pcode.utils.logging import (
     display_training_stat,
@@ -10,8 +11,10 @@ from pcode.utils.logging import (
     dispaly_best_test_stat,
 )
 from pcode.utils.stat_tracker import RuntimeTracker
+from pcode.utils.timer import Timer
+from pcode.utils.auxiliary import get_model_difference
 import pcode.utils.error_handler as error_handler
-import pcode.utils.auxiliary as auxiliary
+from pcode.create_dataset import load_data_batch
 
 
 # sys.excepthook = error_handler.global_except_hook
@@ -21,6 +24,9 @@ def train_and_validate(
     conf, model, criterion, scheduler, optimizer, metrics, data_loader
 ):
     print("=>>>> start training and validation.\n")
+    assert (
+        optimizer.__class__.__name__ != "ParallelCHOCO"
+    ), "NLP tasks right now do not support ParallelCHOCO based on multiprocessing (please use optimizer=parallel_choco_v instead)."
 
     # define runtime stat tracker and start the training.
     tracker_tr = RuntimeTracker(metrics_to_track=metrics.metric_names)
@@ -39,8 +45,9 @@ def train_and_validate(
         )
 
         # configure local step.
-        for batch in data_loader["train_loader"]:
+        for idx, batch in enumerate(data_loader["train_loader"]):
             model.train()
+            scheduler.step(optimizer)
 
             # repackage the hidden.
             _hidden = (
@@ -54,13 +61,13 @@ def train_and_validate(
                 _input = batch.text[
                     :,
                     conf.graph.rank
-                    * conf.batch_size: (conf.graph.rank + 1)
+                    * conf.batch_size : (conf.graph.rank + 1)
                     * conf.batch_size,
                 ]
                 _target = batch.target[
                     :,
                     conf.graph.rank
-                    * conf.batch_size: (conf.graph.rank + 1)
+                    * conf.batch_size : (conf.graph.rank + 1)
                     * conf.batch_size,
                 ]
                 _input, _target = load_data_batch(conf, _input, _target)
@@ -78,20 +85,19 @@ def train_and_validate(
                     _hidden,
                     tracker_tr,
                 )
+            print(conf.graph.rank, "finish inference", idx)
 
             with timer("backward_pass", epoch=scheduler.epoch_):
                 loss.backward()
+            print(conf.graph.rank, "finish backward", idx)
 
             with timer("sync_complete", epoch=scheduler.epoch_):
                 # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), conf.rnn_clip)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), conf.rnn_clip)
                 n_bits_to_transmit = optimizer.step(timer=timer)
-                scheduler.step()
 
             # display the logging info.
-            display_training_stat(
-                conf, scheduler, tracker_tr, n_bits_to_transmit)
+            display_training_stat(conf, scheduler, tracker_tr, n_bits_to_transmit)
 
             # finish one epoch training and to decide if we want to val our model.
             if scheduler.epoch_ % 1 == 0:
@@ -126,12 +132,10 @@ def train_and_validate(
 def inference(conf, model, criterion, metrics, _input, _target, _hidden, tracker=None):
     """Inference on the given model and get loss and accuracy."""
     output, _hidden = model(_input, _hidden)
-    loss = criterion(output.view(-1, conf.n_tokens),
-                     _target.contiguous().view(-1))
+    loss = criterion(output.view(-1, conf.n_tokens), _target.contiguous().view(-1))
     performance = metrics.evaluate(loss, output, _target)
     if tracker is not None:
-        tracker.update_metrics(
-            [loss.item()] + performance, n_samples=_input.size(0))
+        tracker.update_metrics([loss.item()] + performance, n_samples=_input.size(0))
     return loss, _hidden
 
 
@@ -165,17 +169,7 @@ def do_validate(conf, model, optimizer, criterion, scheduler, metrics, data_load
     print("Finished validation.")
 
 
-def validate(
-    conf,
-    model,
-    optimizer,
-    criterion,
-    scheduler,
-    metrics,
-    data_loader,
-    label="local_model",
-    force_evaluate_on_averaged_model=True,
-):
+def validate(conf, model, optimizer, criterion, scheduler, metrics, data_loader):
     """A function for model evaluation."""
 
     def _evaluate(_model, label):
@@ -222,6 +216,27 @@ def validate(
         global_performance = tracker_te.evaluate_global_metrics()
         return global_performance
 
+    # # evaluate the averaged local model on the validation dataset.
+    # if (
+    #     conf.graph_topology != "complete"
+    #     and conf.graph_topology != "data_center"
+    #     and not conf.train_fast
+    # ):
+    #     copied_model = deepcopy(model)
+    #     optimizer.world_aggregator.agg_model(copied_model, op="avg")
+    #     _evaluate(copied_model, label="averaged_model")
+
+    #     # get the l2 distance of the local model to the averaged model
+    #     conf.logger.log_metric(
+    #         name="stat",
+    #         values={
+    #             "rank": conf.graph.rank,
+    #             "epoch": scheduler.epoch_,
+    #             "distance": get_model_difference(model, copied_model),
+    #         },
+    #         tags={"split": "test", "type": "averaged_model"},
+    #     )
+
     # evaluate each local model on the validation dataset.
-    global_performance = _evaluate(model, label=label)
+    global_performance = _evaluate(model, label="local_model")
     return global_performance

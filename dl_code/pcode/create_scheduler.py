@@ -1,149 +1,126 @@
 # -*- coding: utf-8 -*-
-import torch
-from torch.optim.lr_scheduler import _LRScheduler
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-
 import pcode.utils.auxiliary as auxiliary
 
 
 class Scheduler(object):
-    def __init__(self, conf, optimizer):
+    def __init__(self, conf):
         # init
         self.conf = conf
-        self.local_index = 0
-        self.optimizer = optimizer
-        self._update_training_progress()
+        self.local_index = 0 if "local_index" not in conf else conf.local_index
         self.init_learning_rate()
         self.init_lr_scheduler()
 
+    def update_from_checkpoint(self, checkpoint):
+        self.conf.local_index = checkpoint["local_index"]
+        self.local_index = checkpoint["local_index"]
+        self.conf.best_perf = checkpoint["best_perf"]
+
+    def set_best_tracker(self, best_tracker):
+        self.best_tracker = best_tracker
+
+    def state_dict(self):
+        """Returns the state of the scheduler as a :class:`dict`.
+
+        It contains an entry for every variable in self.__dict__ which
+        is not the optimizer.
+        """
+        return {
+            key: value
+            for key, value in self.__dict__.items()
+            if key != "optimizer" and "scheduler" not in key
+        }
+
+    def load_state_dict(self, state_dict):
+        """Loads the schedulers state.
+
+        Arguments:
+            state_dict (dict): scheduler state. Should be an object returned
+                from a call to :meth:`state_dict`.
+        """
+        self.__dict__.update(state_dict)
+
     def init_learning_rate(self):
-        # determine the learning_rate_per_samples.
-        self.lr_scaleup_init_lr = (
-            self.conf.lr_scaleup_init_lr
-            if self.conf.lr_scaleup_init_lr is not None
-            else self.conf.lr
-        )
+        # init the learning rates.
+        self.conf.init_warmup_lr = self.conf.lr
         self.conf.base_batch_size = (
             self.conf.base_batch_size
             if self.conf.base_batch_size is not None
             else self.conf.batch_size
         )
         self.learning_rate_per_samples = self.conf.lr / self.conf.base_batch_size
-        self.learning_rate_ = self.learning_rate_per_samples * self.conf.batch_size
 
-        # if scaleup.
         if self.conf.lr_scaleup:
-            if self.conf.lr_scaleup_factor is None:
-                self.lr_scaleup_factor = self.conf.graph.n_nodes
-            else:
+            if self.conf.lr_scaleup_type == "linear":
+                _lr = self.learning_rate_per_samples * self.conf.batch_size
                 if auxiliary.is_float(self.conf.lr_scaleup_factor):
-                    self.lr_scaleup_factor = float(self.conf.lr_scaleup_factor)
+                    _scale = float(self.conf.lr_scaleup_factor)
                 else:
                     if self.conf.lr_scaleup_factor == "graph":
-                        self.lr_scaleup_factor = self.conf.graph.scaling
+                        _scale = self.conf.graph.scaling
                     elif self.conf.lr_scaleup_factor == "world":
-                        self.lr_scaleup_factor = self.conf.graph.n_nodes
+                        _scale = self.conf.graph.n_nodes
                     else:
                         raise NotImplementedError
-
-            self.learning_rate = self.learning_rate_ * self.lr_scaleup_factor
+            elif self.conf.lr_scaleup_type == "sqrt":
+                _lr = self.conf.lr
+                _scale = (
+                    1.0
+                    * self.conf.graph.n_nodes
+                    * self.conf.batch_size
+                    / self.conf.base_batch_size
+                ) ** 0.5
+            else:
+                raise NotImplementedError
         else:
-            self.learning_rate = self.learning_rate_
+            _lr = self.learning_rate_per_samples * self.conf.batch_size
+            _scale = 1
 
-        # overwrite lr_scaleup_factor.
-        self.lr_scaleup_factor = self.learning_rate / self.lr_scaleup_init_lr
-        self.is_scaledup = True if self.lr_scaleup_factor != 1 else False
-
-        # if warmup.
-        if self.conf.lr_warmup_epochs is None:
-            self.conf.lr_warmup_epochs = min(
-                self.conf.lr_scaleup_factor, self.conf.lr_warmup_epochs_upper_bound
+        # get the eventual learning the backup.
+        self.conf.learning_rate = _lr * _scale
+        self.old_learning_rate = self.conf.learning_rate
+        print(
+            "learning rate will be scaled by the factor of {}. The scaled lr={}".format(
+                _scale, self.conf.learning_rate
             )
-
-        # check the warmup status.
-        self.is_warmuped = (
-            True if self.conf.lr_scaleup_factor != 1 and self.conf.lr_warmup else False
-        )
-
-        # update the lr for the optimizer.
-        if self.is_warmuped:
-            self.update_lr(self.lr_scaleup_init_lr)
-        elif self.is_scaledup:
-            self.update_lr(self.learning_rate)
-
-        self.conf.logger.log(
-            f"LR initialization (lr={self.conf.lr} for mini-batch size={self.conf.base_batch_size} and scaled to {self.learning_rate_} for local mini-batch size={self.conf.batch_size}): lr scaleup={self.is_scaledup}, lr warmup={self.is_warmuped}, learning_rate={self.learning_rate}."
         )
 
     def init_lr_scheduler(self):
-        if self.conf.lr_scheduler == "MultiStepLR":
-            if self.conf.lr_milestones is not None:
-                milestones = [int(x) for x in self.conf.lr_milestones.split(",")]
-            else:
-                milestones = [self.conf.num_epochs + 1]
-            lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
-                self.optimizer, milestones=milestones, gamma=self.conf.lr_decay
-            )
-            scheduler_info = f"use MultiStepLR scheduler: milestones={milestones}, decay_factor={self.conf.lr_decay}"
-        elif self.conf.lr_scheduler == "ExponentialLR":
-            lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-                self.optimizer, gamma=self.conf.lr_decay
-            )
-            scheduler_info = (
-                f"use ExponentialLR scheduler: decay_factor={self.conf.lr_decay}"
-            )
-        elif self.conf.lr_scheduler == "ReduceLROnPlateau":
-            raise NotImplementedError("not support ReduceLROnPlateau yet.")
-            # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            #     self.optimizer,
-            #     factor=self.conf.lr_decay,
-            #     mode="min",
-            #     patience=self.conf.lr_patience,
-            # )
-        else:
-            raise NotImplementedError(
-                f"we do not support this scheduler={self.conf.lr_scheduler} yet."
-            )
+        _lr_schedule_scheme = self.conf.lr_schedule_scheme
+        if (
+            _lr_schedule_scheme == "strict"
+            or _lr_schedule_scheme == "custom_one_cycle"
+            or _lr_schedule_scheme == "custom_multistep"
+            or _lr_schedule_scheme == "custom_convex_decay"
+        ):
+            self.lr_scheduler = DeterministicLRScheduler(self.conf).get_lr_scheduler()
+        elif _lr_schedule_scheme == "reduce_on_plateau":
+            self.lr_scheduler = AdaptiveLRScheduler(self.conf).get_lr_scheduler()
 
-        # in case we need to warmup the learning rate scheduler.
-        if self.is_warmuped:
-            self.lr_scheduler = GradualWarmupScheduler(
-                optimizer=self.optimizer,
-                multiplier=self.lr_scaleup_factor,
-                total_epoch=self.conf.lr_warmup_epochs,
-                after_scheduler=lr_scheduler,
-            )
-            warmup_info = f"first warmup lr={self.lr_scaleup_init_lr} with factor={self.lr_scaleup_factor} from {self.lr_scaleup_init_lr} to {self.learning_rate} for {self.conf.lr_warmup_epochs} epochs, then "
-        else:
-            self.lr_scheduler = lr_scheduler
-            warmup_info = f"first set lr={self.learning_rate}, then "
-        self.conf.logger.log(
-            f"LR scheduler in a nutshell: {warmup_info}{scheduler_info}."
-        )
+    def get_lr(self, **kargs):
+        return self.lr_scheduler(self.epoch_, **kargs)
 
-    def set_best_tracker(self, best_tracker):
-        self.best_tracker = best_tracker
-
-    def step(self, **kargs):
+    def step(self, optimizer, **kargs):
         self.update_training_progress()
-        self.lr_scheduler.step(epoch=self.epoch_)
+
+        # get the new learning rate.
+        lr = self.get_lr()
+        if lr is None:
+            lr = self.old_learning_rate
+
+        # apply the new learning rate.
+        if self.old_learning_rate != lr:
+            self.old_learning_rate = lr
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr
 
     def update_training_progress(self):
         self.local_index += 1
-        self._update_training_progress()
-
-    def update_lr(self, lr):
-        for param_group in self.optimizer.param_groups:
-            param_group["lr"] = lr
-
-    def _update_training_progress(self):
         self.epoch_ = (
             self.local_index / self.conf.num_batches_train_per_device_per_epoch
         )
         self.conf.local_index = self.local_index
         self.conf.epoch_ = self.epoch_
         self.epoch = int(self.epoch_)
-        self.conf.epoch = self.epoch
 
     def is_stop(self):
         if self.conf.stop_criteria == "epoch":
@@ -151,77 +128,276 @@ class Scheduler(object):
         elif self.conf.stop_criteria == "iteration":
             return self.local_index >= self.conf.num_iterations_per_worker
 
-    def update_from_checkpoint(self, checkpoint):
-        self.conf.local_index = checkpoint["local_index"]
-        self.local_index = checkpoint["local_index"]
-        self.conf.best_perf = checkpoint["best_perf"]
+
+class AdaptiveLRScheduler(object):
+    def __init__(self, conf):
+        self.conf = conf
+
+    def get_lr_scheduler(self):
+        def f(epoch_index, **kargs):
+            pass
+
+        return f
 
 
-class GradualWarmupScheduler(_LRScheduler):
-    """ Gradually warm-up(increasing) learning rate in optimizer.
-    Proposed in 'Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour'.
-    Args:
-        optimizer (Optimizer): Wrapped optimizer.
-        multiplier: target learning rate = base lr * multiplier
-        total_epoch: target learning rate is reached at total_epoch, gradually
-        after_scheduler: after target_epoch, use this scheduler(eg. ReduceLROnPlateau)
+class DeterministicLRScheduler(object):
+    def __init__(self, conf):
+        self.conf = conf
+
+    def get_lr_scheduler(self):
+        epoch_fields, lr_fields, scale_indicators = self.get_scheduling_setup()
+        lr_schedulers = self.build_lr_schedulers(
+            epoch_fields, lr_fields, scale_indicators
+        )
+        print(
+            "\nDefine scheduler: epoch_fields={}, lr_fields={}, lr_schedulers={}\n".format(
+                epoch_fields, lr_fields, lr_schedulers
+            )
+        )
+        return self._get_lr_scheduler(epoch_fields, lr_schedulers)
+
+    def _get_lr_scheduler(self, epoch_fields, lr_schedulers):
+        def f(epoch_index, **kargs):
+            def _is_fall_in(index, left_index, right_index):
+                return left_index <= index < right_index
+
+            for ind, (epoch_left, epoch_right) in enumerate(epoch_fields):
+                if _is_fall_in(epoch_index, epoch_left, epoch_right):
+                    return lr_schedulers[ind](epoch_index)
+
+        return f
+
+    def get_scheduling_setup(self):
+        if self.conf.lr_schedule_scheme == "strict":
+            return _get_scheduling_setup_for_strict(self.conf)
+        elif "custom_one_cycle" == self.conf.lr_schedule_scheme:
+            # NOTE: The scheme yet does not support multi-GPU training.
+            # No warmup and no linear scale are applied.
+            return _get_scheduling_setup_for_onecycle(self.conf)
+        elif "custom_multistep" == self.conf.lr_schedule_scheme:
+            return _get_scheduling_setup_for_multistep(self.conf)
+        elif "custom_convex_decay" == self.conf.lr_schedule_scheme:
+            return _get_scheduling_setup_for_convex_decay(self.conf)
+        else:
+            raise NotImplementedError
+
+    def build_lr_schedulers(self, epoch_fields, lr_fields, scale_indicators):
+        lr_schedulers = dict()
+
+        for field_id, (epoch_field, lr_field, indicator) in enumerate(
+            zip(epoch_fields, lr_fields, scale_indicators)
+        ):
+            lr_scheduler = self._build_lr_scheduler(epoch_field, lr_field, indicator)
+            lr_schedulers[field_id] = lr_scheduler
+        return lr_schedulers
+
+    def _build_lr_scheduler(self, epoch_field, lr_field, scale_indicator):
+        lr_left, lr_right = lr_field
+        epoch_left, epoch_right = epoch_field
+        n_steps = epoch_right - epoch_left
+
+        if scale_indicator == "linear":
+            return _linear_scale(lr_left, lr_right, n_steps, epoch_left)
+        elif scale_indicator == "poly":
+            return _poly_scale(lr_left, lr_right, n_steps, epoch_left)
+        elif scale_indicator == "convex":
+            assert self.conf.lr_gamma is not None
+            assert self.conf.lr_mu is not None
+            assert self.conf.lr_alpha is not None
+            return _convex_scale(
+                self.conf.lr_gamma, self.conf.lr_mu, self.conf.lr_alpha
+            )
+        else:
+            raise NotImplementedError
+
+
+"""Define the scheduling step,
+    e.g., logic of epoch_fields, lr_fields and scale_indicators.
+
+    We should be able to determine if we only use the pure info from parser,
+    or use a mixed version (the second one might be more common in practice)
+
+    For `epoch_fields`, we define it by a string separated by ',',
+    e.g., '10,20,30' to indicate different ranges.
+    More precisely, previous `epoch_fields` example
+    is equivalent to three different epoch ranges,
+    i.e., [0, 10), [10, 20), [20, 30).
+
+    For `lr_fields`, it is corresponding to the `epoch_fields`,
+    indicating the left lr and right lr for each epoch range.
+
+    For scale_indicators,
+    it is used to define how to scale the left lr and right lr
+    in the corresponding epoch range.
+"""
+
+# define the formal procedure of setting up the scheduling.
+
+
+def _get_scheduling_setup(conf):
+    assert conf.lr_change_epochs is not None
+    assert conf.lr_fields is not None
+    assert conf.lr_scale_indicators is not None
+
+    # define lr_fields
+    lr_fields = _get_lr_fields(conf.lr_fields)
+
+    # define scale_indicators
+    scale_indicators = _get_lr_scale_indicators(conf.lr_scale_indicators)
+
+    # define epoch_fields
+    epoch_fields = _get_lr_epoch_fields(conf.lr_change_epochs)
+
+    return epoch_fields, lr_fields, scale_indicators
+
+
+def _get_lr_fields(lr_fields):
+    return [
+        [float(_lr) for _lr in lr_field.split(",")] for lr_field in lr_fields.split("/")
+    ]
+
+
+def _get_lr_scale_indicators(lr_scale_indicators):
+    def digital2name(x):
+        return {
+            "0": "linear",
+            "1": "poly",
+            "2": "convex",  # lr = \gamma / (\mu (t + a))
+        }[x]
+
+    return [digital2name(l) for l in lr_scale_indicators.split(",")]
+
+
+def _get_lr_epoch_fields(lr_change_epochs):
+    """note that the change points exclude the head and tail of the epochs.
     """
+    lr_change_epochs = [int(l) for l in lr_change_epochs.split(",")]
+    from_s = lr_change_epochs[:-1]
+    to_s = lr_change_epochs[1:]
+    return list(zip(from_s, to_s))
 
-    def __init__(self, optimizer, multiplier, total_epoch, after_scheduler=None):
-        self.multiplier = multiplier
-        if self.multiplier < 1.0:
-            raise ValueError("multiplier should be greater thant or equal to 1.")
-        self.total_epoch = total_epoch
-        self.after_scheduler = after_scheduler
-        self.finished = False
-        super().__init__(optimizer)
 
-    def get_lr(self):
-        if self.last_epoch > self.total_epoch:
-            if self.after_scheduler:
-                if not self.finished:
-                    self.after_scheduler.base_lrs = [
-                        base_lr * self.multiplier for base_lr in self.base_lrs
-                    ]
-                    self.finished = True
-                return self.after_scheduler.get_lr()
-            return [base_lr * self.multiplier for base_lr in self.base_lrs]
+# case: _get scheduling setup for "strict learnign rate" configuration from the parser.
 
-        return [
-            base_lr
-            * ((self.multiplier - 1.0) * self.last_epoch / self.total_epoch + 1.0)
-            for base_lr in self.base_lrs
+
+def _get_scheduling_setup_for_strict(conf):
+    # define lr_fields
+    conf.lr_change_epochs = "0,{original},{full}".format(
+        original=conf.lr_change_epochs, full=conf.num_epochs
+    )
+
+    return _get_scheduling_setup(conf)
+
+
+# case: _get scheduling setup for "onecycle learning rate" scheme.
+
+
+def _get_scheduling_setup_for_onecycle(conf):
+    conf.lr_fields = "{low},{high}/{high},{low}/{low},{extra_low}".format(
+        low=conf.lr_onecycle_low,
+        high=conf.lr_onecycle_high,
+        extra_low=conf.lr_onecycle_extra_low,
+    )
+    conf.lr_change_epochs = "0,{half_cycle},{cycle},{full}".format(
+        half_cycle=conf.lr_onecycle_num_epoch // 2,
+        cycle=conf.lr_onecycle_num_epoch,
+        full=conf.num_epochs,
+    )
+    conf.lr_scale_indicators = "0,0,0"
+    return _get_scheduling_setup(conf)
+
+
+# case: _get scheduling setup for "multiple-step constant learning rates" scheme.
+
+
+def _get_scheduling_setup_for_multistep(conf):
+    # define lr_fields
+    conf.lr_fields = _build_multistep_lr_fields(
+        conf.lr_change_epochs,
+        conf.lr_warmup,
+        conf.learning_rate,
+        conf.init_warmup_lr,
+        conf.lr_decay,
+    )
+
+    # define lr_change_epochs
+    conf.lr_change_epochs, num_intervals = _build_multistep_lr_change_epochs(
+        conf.lr_change_epochs, conf.lr_warmup, conf.lr_warmup_epochs, conf.num_epochs
+    )
+
+    # define scale_indicators
+    conf.lr_scale_indicators = ",".join(["0"] * num_intervals)
+    return _get_scheduling_setup(conf)
+
+
+def _build_multistep_lr_fields(
+    lr_change_epochs, lr_warmup, learning_rate, init_warmup_lr, lr_decay
+):
+    if lr_change_epochs is not None:
+        _lr_fields = [
+            learning_rate * ((1.0 / lr_decay) ** l)
+            for l in range(len(lr_change_epochs.split(",")) + 1)
         ]
+    else:
+        _lr_fields = [learning_rate]
 
-    def step_ReduceLROnPlateau(self, metrics, epoch=None):
-        if epoch is None:
-            epoch = self.last_epoch + 1
-        self.last_epoch = (
-            epoch if epoch != 0 else 1
-        )  # ReduceLROnPlateau is called at the end of epoch, whereas others are called at beginning.
+    lr_fields = "/".join(["{lr},{lr}".format(lr=lr) for lr in _lr_fields])
 
-        if self.last_epoch <= self.total_epoch:
-            warmup_lr = [
-                base_lr
-                * ((self.multiplier - 1.0) * self.last_epoch / self.total_epoch + 1.0)
-                for base_lr in self.base_lrs
-            ]
-            for param_group, lr in zip(self.optimizer.param_groups, warmup_lr):
-                param_group["lr"] = lr
-        else:
-            if epoch is None:
-                self.after_scheduler.step(metrics, None)
-            else:
-                self.after_scheduler.step(metrics, epoch - self.total_epoch)
+    if lr_warmup:
+        return "{},{}/".format(init_warmup_lr, learning_rate) + lr_fields
+    else:
+        return lr_fields
 
-    def step(self, epoch=None, metrics=None):
-        if type(self.after_scheduler) != ReduceLROnPlateau:
-            if self.finished and self.after_scheduler is not None:
-                if epoch is None:
-                    self.after_scheduler.step(None)
-                else:
-                    self.after_scheduler.step(epoch)
-            else:
-                return super(GradualWarmupScheduler, self).step(epoch)
-        else:
-            self.step_ReduceLROnPlateau(metrics, epoch)
+
+def _build_multistep_lr_change_epochs(
+    lr_change_epochs, lr_warmup, lr_warmup_epochs, num_epochs
+):
+    if lr_change_epochs is not None:
+        lr_change_epochs = [0] + lr_change_epochs.split(",") + [num_epochs]
+    else:
+        lr_change_epochs = [0, num_epochs]
+
+    if lr_warmup:
+        lr_change_epochs = [0, lr_warmup_epochs] + lr_change_epochs[1:]
+    return ",".join([str(x) for x in lr_change_epochs]), len(lr_change_epochs) - 1
+
+
+# case: _get scheduling setup for "convex learning" scheme.
+
+
+def _get_scheduling_setup_for_convex_decay(conf):
+    # define lr_fields
+    conf.lr_fields = "{},{}".format(conf.learning_rate, 0)
+
+    # define lr_change_epochs
+    conf.lr_change_epochs = "0,{full}".format(full=conf.num_epochs)
+
+    # define scale_indicators
+    conf.lr_scale_indicators = "2"
+    return _get_scheduling_setup(conf)
+
+
+"""define choice of scaling learning rate within the range."""
+
+
+def _linear_scale(lr_left, lr_right, n_steps, abs_index):
+    def f(index):
+        step = (lr_right - lr_left) / n_steps
+        return (index - abs_index) * step + lr_left
+
+    return f
+
+
+def _poly_scale(lr_left, lr_right, n_steps, abs_index):
+    def f(index):
+        return lr_left * ((1 - (index - abs_index) / n_steps) ** 2)
+
+    return f
+
+
+def _convex_scale(gamma, mu, alpha):
+    # it is expected in the form of lr = \gamma / (\mu (t + a))
+    def f(index):
+        return gamma / (mu * (alpha + index))
+
+    return f

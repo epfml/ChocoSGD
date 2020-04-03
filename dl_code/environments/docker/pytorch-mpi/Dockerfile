@@ -29,6 +29,8 @@ ENV PATH $HOME/conda/envs/pytorch-py$PYTHON_VERSION/bin:$PATH
 # install pytorch, torchvision, torchtext.
 RUN git clone --recursive  https://github.com/pytorch/pytorch
 RUN cd pytorch && \
+    git checkout tags/v1.3.0 && \
+    git submodule sync && \
     git submodule update --init && \
     TORCH_CUDA_ARCH_LIST="3.5 3.7 5.2 6.0 6.1 7.0+PTX" TORCH_NVCC_FLAGS="-Xfatbin -compress-all" \
     CMAKE_PREFIX_PATH="$(dirname $(which $HOME/conda/bin/conda))/../" \

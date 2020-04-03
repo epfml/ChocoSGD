@@ -73,7 +73,7 @@ def main(conf):
     optimizer = create_optimizer.define_optimizer(conf, model)
 
     # define the lr scheduler.
-    scheduler = create_scheduler.Scheduler(conf, optimizer)
+    scheduler = create_scheduler.Scheduler(conf)
 
     # add model with data-parallel wrapper.
     if conf.graph.on_cuda:
@@ -156,7 +156,8 @@ def init_config(conf):
         graph_topology=conf.graph_topology,
         world=conf.world,
         n_mpi_process=conf.n_mpi_process,  # the # of total main processes.
-        n_sub_process=conf.n_sub_process,  # the # of subprocess for each main process.
+        # the # of subprocess for each main process.
+        n_sub_process=conf.n_sub_process,
         comm_device=conf.comm_device,
         on_cuda=conf.on_cuda,
         rank=cur_rank,
@@ -188,14 +189,11 @@ def init_config(conf):
 
 
 if __name__ == "__main__":
-    # parse the arguments.
     conf = get_args()
 
-    # configure for multi-process training.
     if conf.optimizer == "parallel_choco":
         mp.set_start_method("forkserver", force=True)
         # mp.set_start_method("spawn", force=True)
         mp.set_sharing_strategy("file_system")
 
-    # enter the training procedure.
     main(conf)
