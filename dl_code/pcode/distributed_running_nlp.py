@@ -24,15 +24,15 @@ def train_and_validate(
     conf, model, criterion, scheduler, optimizer, metrics, data_loader
 ):
     print("=>>>> start training and validation.\n")
+    assert (
+        optimizer.__class__.__name__ != "ParallelCHOCO"
+    ), "NLP tasks right now do not support ParallelCHOCO based on multiprocessing (please use optimizer=parallel_choco_v instead)."
 
     # define runtime stat tracker and start the training.
     tracker_tr = RuntimeTracker(metrics_to_track=metrics.metric_names)
 
-    # define the timer for different operations.
-    timer = Timer(
-        verbosity_level=1 if conf.track_time and not conf.train_fast else 0,
-        log_fn=conf.logger.log_metric,
-    )
+    # get the timer.
+    timer = conf.timer
 
     # break until finish expected full epoch training.
     print("=>>>> enter the training.\n")
@@ -45,7 +45,7 @@ def train_and_validate(
         )
 
         # configure local step.
-        for batch in data_loader["train_loader"]:
+        for idx, batch in enumerate(data_loader["train_loader"]):
             model.train()
             scheduler.step(optimizer)
 
@@ -85,9 +85,11 @@ def train_and_validate(
                     _hidden,
                     tracker_tr,
                 )
+            print(conf.graph.rank, "finish inference", idx)
 
             with timer("backward_pass", epoch=scheduler.epoch_):
                 loss.backward()
+            print(conf.graph.rank, "finish backward", idx)
 
             with timer("sync_complete", epoch=scheduler.epoch_):
                 # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.

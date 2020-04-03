@@ -16,9 +16,11 @@ def load_data_batch(conf, _input, _target):
 
 def define_dataset(conf, force_shuffle=False):
     if "rnn_lm" in conf.arch:
-        return define_nlp_dataset(conf, force_shuffle)
+        dataset = define_nlp_dataset(conf, force_shuffle)
     else:
-        return define_cv_dataset(conf, force_shuffle)
+        dataset = define_cv_dataset(conf, force_shuffle)
+    print("Defined dataset.")
+    return dataset
 
 
 """define loaders for different datasets."""
@@ -151,12 +153,13 @@ def _define_cv_dataset(conf, partition_type, dataset_type, force_shuffle=False):
         (
             "Data stat: we have {} samples for {}, "
             + "load {} data for process (rank {}). "
-            + "The number of batches is {}."
+            + "The batch size is {}, number of batches is {}."
         ).format(
             len(dataset),
             dataset_type,
             len(data_to_load),
             conf.graph.rank,
+            batch_size,
             len(data_loader),
         )
     )

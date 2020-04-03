@@ -16,7 +16,7 @@ def smoothing_func(x, y, smooth_length=10):
         else:
             start_index = end_index - smooth_length
 
-        data = y[start_index: end_index]
+        data = y[start_index:end_index]
         if len(data) == 0:
             return y[start_index]
         else:
@@ -48,7 +48,8 @@ def groupby_indices(results, grouper):
 def find_same_num_sync(num_update_steps_and_local_step):
     list_of_num_sync = [
         num_update_steps // local_step
-        for num_update_steps, local_step in num_update_steps_and_local_step]
+        for num_update_steps, local_step in num_update_steps_and_local_step
+    ]
     return min(list_of_num_sync)
 
 
@@ -73,18 +74,26 @@ def add_communication_delay(times, local_step, delay_factor):
     """add communication delay to original time."""
     return [
         time + delay_factor * ((ind + 1) // local_step)
-        for ind, time in enumerate(times)]
+        for ind, time in enumerate(times)
+    ]
 
 
 """plot style related."""
 
 
 def determine_color_and_lines(num_rows, num_cols, ind):
-    line_styles = ['-', '--', '-.', ':']
+    line_styles = ["-", "--", "-.", ":"]
     color_styles = [
-        '#377eb8', '#ff7f00', '#4daf4a',
-        '#f781bf', '#a65628', '#984ea3',
-        '#999999', '#e41a1c', '#dede00']
+        "#377eb8",
+        "#ff7f00",
+        "#4daf4a",
+        "#f781bf",
+        "#a65628",
+        "#984ea3",
+        "#999999",
+        "#e41a1c",
+        "#dede00",
+    ]
 
     num_line_styles = len(line_styles)
     num_color_styles = len(color_styles)
@@ -106,13 +115,24 @@ def determine_color_and_lines(num_rows, num_cols, ind):
 
 
 def configure_figure(
-        ax, xlabel, ylabel, title=None,
-        has_legend=True, legend_loc='lower right', legend_ncol=2,
-        bbox_to_anchor=[0, 0]):
+    ax,
+    xlabel,
+    ylabel,
+    title=None,
+    has_legend=True,
+    legend_loc="lower right",
+    legend_ncol=2,
+    bbox_to_anchor=[0, 0],
+):
     if has_legend:
         ax.legend(
-            loc=legend_loc, bbox_to_anchor=bbox_to_anchor,
-            ncol=legend_ncol, shadow=True, fancybox=True, fontsize=20)
+            loc=legend_loc,
+            bbox_to_anchor=bbox_to_anchor,
+            ncol=legend_ncol,
+            shadow=True,
+            fancybox=True,
+            fontsize=20,
+        )
 
     ax.set_xlabel(xlabel, fontsize=24, labelpad=18)
     ax.set_ylabel(ylabel, fontsize=24, labelpad=18)
@@ -124,44 +144,76 @@ def configure_figure(
     return ax
 
 
-def plot_one_case(ax, label, line_style, color_style, mark_style,
-                  line_width=2.0, mark_every=5000,
-                  x=None, y=None, sns_plot=None, remove_duplicate=False):
+def plot_one_case(
+    ax,
+    label,
+    line_style,
+    color_style,
+    mark_style,
+    line_width=2.0,
+    mark_every=5000,
+    x=None,
+    y=None,
+    sns_plot=None,
+    remove_duplicate=False,
+):
     if sns_plot is not None and not remove_duplicate:
         ax = sns.lineplot(
-            x='x', y='y', data=sns_plot,
+            x="x",
+            y="y",
+            data=sns_plot,
             label=label,
             linewidth=line_width,
-            linestyle=line_style, color=color_style,
-            marker=mark_style, markevery=mark_every, markersize=16, ax=ax)
+            linestyle=line_style,
+            color=color_style,
+            marker=mark_style,
+            markevery=mark_every,
+            markersize=16,
+            ax=ax,
+        )
     elif sns_plot is not None and remove_duplicate:
         ax = sns.lineplot(
-            x='x', y='y', data=sns_plot,
+            x="x",
+            y="y",
+            data=sns_plot,
             label=label,
             linewidth=line_width,
-            linestyle=line_style, color=color_style,
-            marker=mark_style, markevery=mark_every, markersize=16, ax=ax,
-            estimator=None)
+            linestyle=line_style,
+            color=color_style,
+            marker=mark_style,
+            markevery=mark_every,
+            markersize=16,
+            ax=ax,
+            estimator=None,
+        )
     else:
         ax.plot(
-            x, y, label=label,
+            x,
+            y,
+            label=label,
             linewidth=line_width,
-            linestyle=line_style, color=color_style,
-            marker=mark_style, markevery=mark_every, markersize=16)
+            linestyle=line_style,
+            color=color_style,
+            marker=mark_style,
+            markevery=mark_every,
+            markersize=16,
+        )
     return ax
 
 
 def build_legend(args, legend):
-    legend = legend.split(',')
+    legend = legend.split(",")
 
     my_legend = []
     for _legend in legend:
         _legend_content = args[_legend]
         my_legend += [
-            '{}={}'.format(
+            "{}={}".format(
                 _legend,
                 list(_legend_content)[0]
-                if 'pandas' in str(type(_legend_content)) else _legend_content
+                if "pandas" in str(type(_legend_content))
+                else _legend_content,
             )
         ]
-    return ', '.join(my_legend)
+    return ", ".join(my_legend)
+

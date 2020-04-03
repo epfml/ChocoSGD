@@ -24,6 +24,8 @@ def define_cv_model(conf):
         model = models.__dict__["densenet"](conf)
     elif "vgg" in conf.arch:
         model = models.__dict__["vgg"](conf)
+    elif "lenet" in conf.arch:
+        model = models.__dict__["lenet"](conf)
     else:
         model = models.__dict__[conf.arch](conf)
 

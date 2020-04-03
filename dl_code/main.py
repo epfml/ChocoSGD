@@ -5,10 +5,9 @@ import datetime
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+import torch.multiprocessing as mp
 
 from parameters import get_args
-
-from pcode.models.data_parallel_wrapper import AllReduceDataParallel
 
 import pcode.create_dataset as create_dataset
 import pcode.create_optimizer as create_optimizer
@@ -21,6 +20,7 @@ import pcode.utils.checkpoint as checkpoint
 import pcode.utils.op_paths as op_paths
 import pcode.utils.stat_tracker as stat_tracker
 import pcode.utils.logging as logging
+from pcode.utils.timer import Timer
 
 
 def init_distributed_world(conf, backend):
@@ -55,17 +55,25 @@ def main(conf):
     # init the config.
     init_config(conf)
 
+    # define the timer for different operations.
+    # if we choose the `train_fast` mode, then we will not track the time.
+    conf.timer = Timer(
+        verbosity_level=1 if conf.track_time and not conf.train_fast else 0,
+        log_fn=conf.logger.log_metric,
+        on_cuda=conf.on_cuda,
+    )
+
     # create dataset.
     data_loader = create_dataset.define_dataset(conf, force_shuffle=True)
 
     # create model
     model = create_model.define_model(conf, data_loader=data_loader)
 
-    # define the lr scheduler.
-    scheduler = create_scheduler.Scheduler(conf)
-
     # define the optimizer.
     optimizer = create_optimizer.define_optimizer(conf, model)
+
+    # define the lr scheduler.
+    scheduler = create_scheduler.Scheduler(conf)
 
     # add model with data-parallel wrapper.
     if conf.graph.on_cuda:
@@ -73,7 +81,11 @@ def main(conf):
             model = torch.nn.DataParallel(model, device_ids=conf.graph.device)
 
     # (optional) reload checkpoint
-    checkpoint.maybe_resume_from_checkpoint(conf, model, optimizer)
+    try:
+        checkpoint.maybe_resume_from_checkpoint(conf, model, optimizer, scheduler)
+    except RuntimeError as e:
+        conf.logger.log(f"Resume Error: {e}")
+        conf.resumed = False
 
     # train amd evaluate model.
     if "rnn_lm" in conf.arch:
@@ -144,7 +156,8 @@ def init_config(conf):
         graph_topology=conf.graph_topology,
         world=conf.world,
         n_mpi_process=conf.n_mpi_process,  # the # of total main processes.
-        n_sub_process=conf.n_sub_process,  # the # of subprocess for each main process.
+        # the # of subprocess for each main process.
+        n_sub_process=conf.n_sub_process,
         comm_device=conf.comm_device,
         on_cuda=conf.on_cuda,
         rank=cur_rank,
@@ -177,4 +190,10 @@ def init_config(conf):
 
 if __name__ == "__main__":
     conf = get_args()
+
+    if conf.optimizer == "parallel_choco":
+        mp.set_start_method("forkserver", force=True)
+        # mp.set_start_method("spawn", force=True)
+        mp.set_sharing_strategy("file_system")
+
     main(conf)

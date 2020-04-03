@@ -27,7 +27,7 @@ def apply_gradient(param_groups, state, apply_grad_to_model=True):
 
             # add weight decay.
             if weight_decay != 0:
-                d_p.add_(weight_decay, p.data)
+                d_p.add_(p.data, alpha=weight_decay)
 
             # apply the momentum.
             if momentum != 0:
@@ -36,13 +36,13 @@ def apply_gradient(param_groups, state, apply_grad_to_model=True):
                     buf.mul_(momentum).add_(d_p)
                 else:
                     buf = param_state["momentum_buffer"]
-                    buf.mul_(momentum).add_(1 - dampening, d_p)
+                    buf.mul_(momentum).add_(d_p, alpha=1 - dampening)
                 if nesterov:
                     d_p = d_p.add(momentum, buf)
                 else:
                     d_p = buf
             if apply_grad_to_model:
-                p.data.add_(-group["lr"], d_p)
+                p.data.add_(d_p, alpha=-group["lr"])
             else:
                 p.grad.data = d_p
 
@@ -65,9 +65,9 @@ def recover_params(
 
 
 def update_params_from_neighbor(
-    neighbor_hat_params, flatten_params, consenus_stepsize, self_rank
+    neighbor_hat_params, flatten_params, consensus_stepsize, self_rank
 ):
-    flatten_params.buffer += consenus_stepsize * (
+    flatten_params.buffer += consensus_stepsize * (
         neighbor_hat_params["memory"].buffer - neighbor_hat_params[self_rank].buffer
     )
 

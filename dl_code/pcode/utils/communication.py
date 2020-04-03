@@ -157,7 +157,7 @@ class CentralizedAggregation(Aggregation):
         distributed=True,
         communication_scheme="all_reduce",
         async_op=False,
-        **kargs
+        **kargs,
     ):
         """Aggregate data using `op` operation.
         Args:
@@ -222,6 +222,9 @@ class CentralizedAggregation(Aggregation):
                 return gathered_list
         else:
             raise NotImplementedError
+
+    def complete_wait(self, req):
+        req.wait()
 
 
 class DecentralizedAggregation(Aggregation):
@@ -291,74 +294,19 @@ class DecentralizedAggregation(Aggregation):
 class EfficientDecentralizedAggregation(Aggregation):
     """Aggregate updates in a decentralized manner."""
 
-    def __init__(self, world, rank, neighbors_info):
+    def __init__(self, world, rank, neighbors_info, graph):
         # init
         self.rank = rank
         self.world = world
+        self.graph = graph
+
         self.neighbors_info = neighbors_info
-        self.neighbor_ranks = sorted(
-            [
-                neighbor_rank
-                for neighbor_rank in neighbors_info.keys()
-                if neighbor_rank != rank
-            ]
-        )
-
-        # get the world size from the view of the current rank.
-        self.sub_world_size = float(len(self.neighbor_ranks))
-
-        # use its neighborhoods as its group.
-        assert len(self.neighbor_ranks) > 0
-        self.group_dict = dict()
-        for rank in self.neighbor_ranks:
-            self.group_dict[rank] = dist.new_group(sorted([rank, self.rank]))
-        self.group_dict[self.rank] = dist.new_group(
-            sorted(self.neighbor_ranks + [self.rank])
-        )
-        self.group = dist.new_group(self.world)
-
-    def _agg_(self, data, op, force_wait=True):
-        """Aggregate data using `op` operation.
-        Args:
-            data (:obj:`torch.Tensor`): A Tensor to be aggragated.
-            op (str): Aggregation methods like `avg`, `sum`, `min`, `max`, `weighted`, etc.
-        Returns:
-            :obj:`torch.Tensor`: An aggregated tensor.
-        """
-        # # async send data.
-        local_data = {i: torch.empty_like(data) for i in self.neighbor_ranks}
-        local_data[self.rank] = data
-
-        req = dist.broadcast(local_data[self.rank], src=self.rank, async_op=True)
-        reqs = [req]
-        for node_rank in self.neighbor_ranks:
-            req = dist.broadcast(local_data[node_rank], src=node_rank, async_op=True)
-            reqs.append(req)
-
-        # wait until finish.
-        if force_wait:
-            self.complete_wait(reqs)
-
-            # Aggregate local_data
-            if op == "avg":
-                output = sum(local_data.values()) / (self.sub_world_size)
-            elif op == "weighted":
-                output = sum(
-                    [
-                        tensor * self.neighbors_info[rank]
-                        for rank, tensor in local_data.items()
-                    ]
-                )
-            elif op == "get_raw_sync_data":
-                output = local_data
-            else:
-                raise NotImplementedError("op {} is not supported yet.".format(op))
-            return output
-        else:
-            if op == "get_raw_sync_data":
-                return reqs, local_data
-            else:
-                raise NotImplementedError("op {} is not supported yet.".format(op))
+        self.neighbor_ranks = [
+            neighbor_rank
+            for neighbor_rank in neighbors_info.keys()
+            if neighbor_rank != rank
+        ]
+        self.out_edges, self.in_edges = graph.get_edges()
 
     def _agg(self, data, op, force_wait=True):
         """Aggregate data using `op` operation.
@@ -368,55 +316,50 @@ class EfficientDecentralizedAggregation(Aggregation):
         Returns:
             :obj:`torch.Tensor`: An aggregated tensor.
         """
+        data = data.detach().clone()
+        self.in_buffer = {i: torch.empty_like(data) for i in self.neighbor_ranks}
+        self.in_buffer[self.rank] = data
+
         # async send data.
-        local_data = [torch.empty_like(data) for _ in self.world]
-        reqs = [dist.all_gather(local_data, data, group=self.group, async_op=True)]
-
-        # wait until finish.
-        if force_wait:
-            self.complete_wait(reqs)
-
-            # Aggregate local_data
-            if op == "avg":
-                raise NotImplementedError("op {} is not supported yet.".format(op))
-            elif op == "weighted":
-                output = sum(
-                    [
-                        local_data[rank] * info
-                        for rank, info in self.neighbors_info.items()
-                    ]
-                )
-            elif op == "get_raw_sync_data":
-                output = dict(
-                    (rank, local_data[rank])
-                    for rank, info in self.neighbors_info.items()
-                )
-            else:
-                raise NotImplementedError("op {} is not supported yet.".format(op))
-            return output
-        else:
-            if op == "get_raw_sync_data":
-                return (
-                    reqs,
-                    dict(
-                        (rank, local_data[rank])
-                        for rank, info in self.neighbors_info.items()
-                    ),
-                )
-            else:
-                raise NotImplementedError("op {} is not supported yet.".format(op))
+        out_reqs, in_reqs = [], []
+        for out_edge, in_edge in zip(self.out_edges, self.in_edges):
+            out_req = dist.broadcast(
+                tensor=self.in_buffer[self.rank],
+                src=out_edge.src,
+                group=out_edge.process_group,
+                async_op=True,
+            )
+            out_reqs.append(out_req)
+            in_reqs = []
+            in_req = dist.broadcast(
+                tensor=self.in_buffer[in_edge.src],
+                src=in_edge.src,
+                group=in_edge.process_group,
+                async_op=True,
+            )
+            in_reqs.append(in_req)
+        return [out_reqs, in_reqs], self.in_buffer
 
     def complete_wait(self, reqs):
-        for req in reqs:
+        out_reqs, in_reqs = reqs
+
+        while len(out_reqs) > 0:
+            req = out_reqs.pop()
+            req.wait()
+
+        while len(in_reqs) > 0:
+            req = in_reqs.pop()
             req.wait()
 
 
-def get_aggregators(cur_rank, world, neighbors_info, aggregator_type):
+def get_aggregators(cur_rank, world, neighbors_info, aggregator_type, graph=None):
     if "centralized" == aggregator_type:
         return CentralizedAggregation(cur_rank, world, neighbors_info)
     elif "decentralized" == aggregator_type:
         return DecentralizedAggregation(cur_rank, neighbors_info)
     elif "efficient_decentralized" == aggregator_type:
-        return EfficientDecentralizedAggregation(world, cur_rank, neighbors_info)
+        return EfficientDecentralizedAggregation(
+            world=world, rank=cur_rank, neighbors_info=neighbors_info, graph=graph
+        )
     else:
         raise NotImplementedError

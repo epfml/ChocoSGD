@@ -6,6 +6,7 @@ from scipy.sparse.linalg import eigs
 import networkx
 
 import torch
+import torch.distributed as dist
 
 
 class UndirectedGraph(ABC):
@@ -179,6 +180,9 @@ class RingGraph(PhysicalLayout):
             n_mpi_process
         )
 
+        # init some pytorch specific group configuration.
+        self._make_process_group()
+
     def _compute_mixing_matrix_and_rho(self, n):
         assert n > 2
 
@@ -211,6 +215,55 @@ class RingGraph(PhysicalLayout):
             lambdan = eigenvals[-1]
 
         return mixing_matrix, 1 - max(abs(lambda2), abs(lambdan))
+
+    def _make_process_group(self):
+        def _rotate_forward(r, p):
+            return (r + p) % self.n_nodes
+
+        def _rotate_backward(r, p):
+            temp = r
+            for _ in range(p):
+                temp -= 1
+                if temp < 0:
+                    temp = self.n_nodes - 1
+            return temp
+
+        def _add_peers(rank, peers):
+            for peer in peers:
+                if peer not in self.phone_book[rank]:
+                    self.phone_book[rank].append(Edge(dest=peer, src=rank))
+
+        # init the group.
+        self.phone_book = [[] for _ in range(self.n_nodes)]
+        for rank in range(self.n_nodes):
+            f_peer = _rotate_forward(rank, 1)
+            b_peer = _rotate_backward(rank, 1)
+            _add_peers(rank, [f_peer, b_peer])
+
+    def get_edges(self):
+        """ Returns the pairwise process groups between rank and the out and
+            in-peers corresponding to 'self.rank'.
+        """
+        # get out- and in-peers using new group-indices
+        out_edges = self.phone_book[self.rank]
+        in_edges = []
+
+        for group_index in range(len(out_edges)):
+            for rank, edges in enumerate(self.phone_book):
+                if rank == self.rank:
+                    continue
+                if self.rank == edges[group_index].dest:
+                    in_edges.append(self.phone_book[rank][group_index])
+        return out_edges, in_edges
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        del state["phone_book"]
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.phone_book = dict()
 
     @property
     def n_edges(self):
@@ -364,6 +417,64 @@ class ExpanderGraph(PhysicalLayout):
         }
 
 
+class MargulisExpanderGraph(PhysicalLayout):
+    def __init__(self, n_mpi_process, n_sub_process, world, comm_device, on_cuda, rank):
+        super(MargulisExpanderGraph, self).__init__(
+            n_mpi_process, n_sub_process, world, comm_device, on_cuda, rank
+        )
+        self._mixing_matrix = self._define_graph(n_mpi_process)
+
+    def _define_graph(self, n_mpi_process):
+        base = int(np.sqrt(n_mpi_process))
+        assert (base * base) == n_mpi_process
+
+        graph = networkx.generators.expanders.margulis_gabber_galil_graph(base)
+
+        # get the mixing matrix.
+        mixing_matrix = networkx.adjacency_matrix(graph).toarray().astype(np.float)
+        mixing_matrix[mixing_matrix > 1] = 1
+
+        degrees = mixing_matrix.sum(axis=1)
+        mixing_matrix = mixing_matrix.astype(np.float)
+        for node in np.argsort(degrees)[::-1]:
+            mixing_matrix[:, node][mixing_matrix[:, node] == 1] = 1.0 / degrees[node]
+            mixing_matrix[node, :][mixing_matrix[node, :] == 1] = 1.0 / degrees[node]
+            mixing_matrix[node, node] = (
+                1 - np.sum(mixing_matrix[node, :]) + mixing_matrix[node, node]
+            )
+        return mixing_matrix
+
+    @property
+    def n_nodes(self):
+        return self._n_mpi_process
+
+    @property
+    def n_edges(self):
+        raise NotImplementedError
+
+    @property
+    def rho(self):
+        raise NotImplementedError
+
+    @property
+    def beta(self):
+        raise NotImplementedError
+
+    @property
+    def matrix(self):
+        return self._mixing_matrix
+
+    @property
+    def scaling(self):
+        return len(self.get_neighborhood())
+
+    def get_neighborhood(self):
+        row = self._mixing_matrix[self._rank]
+        return {
+            c: v for c, v in zip(range(len(row)), row) if (v != 0 or c == self._rank)
+        }
+
+
 class SocialNetworkGraph(PhysicalLayout):
     def __init__(self, n_mpi_process, n_sub_process, world, comm_device, on_cuda, rank):
         super(SocialNetworkGraph, self).__init__(
@@ -478,6 +589,13 @@ class RingExtGraph(PhysicalLayout):
         return {c: v for c, v in zip(range(len(row)), row) if v != 0}
 
 
+class Edge(object):
+    def __init__(self, dest, src):
+        self.src = src
+        self.dest = dest
+        self.process_group = dist.new_group([src, dest])
+
+
 def define_graph_topology(
     graph_topology,
     world,
@@ -496,6 +614,8 @@ def define_graph_topology(
         graph_class = TorusGraph
     elif graph_topology == "expander":
         graph_class = ExpanderGraph
+    elif graph_topology == "margulis_expander":
+        graph_class = MargulisExpanderGraph
     elif graph_topology == "social":
         graph_class = SocialNetworkGraph
     else:

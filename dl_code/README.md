@@ -1,12 +1,8 @@
-# CHOCO-SGD
-Deep Learning code for the main experiments of the paper [Decentralized Deep Learning with Arbitrary Communication Compression](https://arxiv.org/abs/1907.09356).
-
-
-## Getting started
+# Getting started
 Our experiments heavily rely on `Docker` and `Kubernetes`. For the detailed experimental environment setup, please refer to dockerfile under the `environments` folder.
 
 
-### Use case of distributed training (centralized/decentralized)
+## Use case of distributed training (centralized/decentralized)
 Some simple explanation of the arguments used in the code.
 * Arguments related to *distributed training*:
     * The `n_mpi_process` and `n_sub_process` indicates the number of nodes and the number of GPUs for each node. The data-parallel wrapper is adapted and applied locally for each node.
@@ -20,24 +16,25 @@ Some simple explanation of the arguments used in the code.
     * The `graph_topology` 
     * The `optimizer` will decide the type of distributed training, e.g., centralized SGD, decentralized SGD
     * The `comm_op` specifies the communication compressor we can use, e.g., `sign+norm`, `random-k`, `top-k`.
-    * The `choco_consenus_stepsize` determines the `consenus_stepsize` for `parallel_choco`.
+    * The `consensus_stepsize` determines the `consensus stepsize` for different decentralized algorithms (e.g. `parallel_choco`, `deep_squeeze`).
 * Arguments related to *learning*:
-    * The `lr_schedule_scheme` and `lr_change_epochs` indicates that it is a stepwise learning rate schedule, with decay factor `10` for epoch `150` and `225`.
-    * The `lr_scaleup`, `lr_warmup` and `lr_warmup_epochs` will decide if we want to scale up the learning rate, or warm up the learning rate.
+    * The `lr_scaleup`, `lr_warmup` and `lr_warmup_epochs` will decide if we want to scale up the learning rate, or warm up the learning rate. For more details, please check `pcode/create_scheduler.py`.
 
-The script below trains `ResNet-20` with `CIFAR-10`, as an example of decentralized training algorithm `parallel_choco` with `sign+norm` communication compressor.
+### Examples
+The script below trains `ResNet-20` with `CIFAR-10`, as an example of centralized training algorithm `CHOCO`. More examples can be found in `exps`.
 ```bash
-$HOME/conda/envs/pytorch-py3.6/bin/python run.py \
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 $HOME/conda/envs/pytorch-py3.6/bin/python run.py \
     --arch resnet20 --optimizer parallel_choco \
-    --avg_model True --experiment demo \
+    --avg_model True --experiment demo --manual_seed 6 \
     --data cifar10 --pin_memory True \
-    --batch_size 128 --base_batch_size ${base_batch_size[j]} --num_workers 2 --eval_freq 1 \
+    --batch_size 128 --base_batch_size 64 --num_workers 2 \
     --num_epochs 300 --partition_data random --reshuffle_per_epoch True --stop_criteria epoch \
-    --n_mpi_process 16 --n_sub_process 1 --world 0,0,0,0,0,0,0,0 --on_cuda True --use_ipc False --comm_device cuda \
-    --lr 0.1 --lr_scaleup True --lr_scaleup_factor graph --lr_warmup True --lr_warmup_epochs 5 \
-    --lr_schedule_scheme custom_multistep --lr_change_epochs 150,225 --lr_decay 10 \
+    --n_mpi_process 16 --n_sub_process 1 --world 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 \
+    --on_cuda True --use_ipc False \
+    --lr 0.1 --lr_scaleup True --lr_warmup True --lr_warmup_epochs 5 \
+    --lr_scheduler MultiStepLR --lr_decay 0.1 --lr_milestones 150,225 \
+    --comm_op sign --consensus_stepsize 0.5 --compress_ratio 0.9 --quantize_level 16 --is_biased True \
     --weight_decay 1e-4 --use_nesterov True --momentum_factor 0.9 \
-    --comm_op sign --choco_consenus_stepsize 0.5 --compress_ratio 0.9 --quantize_level 16 --is_biased True \
-    --hostfile iccluster/hostfile --graph_topology ring --track_time True --display_tracked_time True \
-    --python_path $HOME/conda/envs/pytorch-py3.6/bin/python --mpi_path $HOME/.openmpi/ --evaluate_avg True
+    --hostfile hostfile --graph_topology ring --track_time True --display_tracked_time True \
+    --python_path $HOME/conda/envs/pytorch-py3.6/bin/python --mpi_path $HOME/.openmpi/
 ```

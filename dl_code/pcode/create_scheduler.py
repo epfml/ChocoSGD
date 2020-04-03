@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import pcode.utils.auxiliary as auxiliary
 
 
 class Scheduler(object):
@@ -8,6 +9,11 @@ class Scheduler(object):
         self.local_index = 0 if "local_index" not in conf else conf.local_index
         self.init_learning_rate()
         self.init_lr_scheduler()
+
+    def update_from_checkpoint(self, checkpoint):
+        self.conf.local_index = checkpoint["local_index"]
+        self.local_index = checkpoint["local_index"]
+        self.conf.best_perf = checkpoint["best_perf"]
 
     def set_best_tracker(self, best_tracker):
         self.best_tracker = best_tracker
@@ -36,17 +42,25 @@ class Scheduler(object):
     def init_learning_rate(self):
         # init the learning rates.
         self.conf.init_warmup_lr = self.conf.lr
+        self.conf.base_batch_size = (
+            self.conf.base_batch_size
+            if self.conf.base_batch_size is not None
+            else self.conf.batch_size
+        )
         self.learning_rate_per_samples = self.conf.lr / self.conf.base_batch_size
 
         if self.conf.lr_scaleup:
             if self.conf.lr_scaleup_type == "linear":
                 _lr = self.learning_rate_per_samples * self.conf.batch_size
-                if self.conf.lr_scaleup_factor == "graph":
-                    _scale = self.conf.graph.scaling
-                elif self.conf.lr_scaleup_factor == "world":
-                    _scale = self.conf.graph.n_nodes
+                if auxiliary.is_float(self.conf.lr_scaleup_factor):
+                    _scale = float(self.conf.lr_scaleup_factor)
                 else:
-                    raise NotImplementedError
+                    if self.conf.lr_scaleup_factor == "graph":
+                        _scale = self.conf.graph.scaling
+                    elif self.conf.lr_scaleup_factor == "world":
+                        _scale = self.conf.graph.n_nodes
+                    else:
+                        raise NotImplementedError
             elif self.conf.lr_scaleup_type == "sqrt":
                 _lr = self.conf.lr
                 _scale = (

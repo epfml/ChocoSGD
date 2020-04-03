@@ -1,0 +1,4 @@
+*iccluster
+*.vscode
+*Makefile
+*test.sh

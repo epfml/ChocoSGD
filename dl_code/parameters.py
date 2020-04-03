@@ -81,7 +81,6 @@ def get_args():
         "--lr_scaleup_factor",
         type=str,
         default="graph",
-        choices=["graph", "world"],
         help="scale by the graph connection, or the world size",
     )
     parser.add_argument("--lr_warmup", type=str2bool, default=False)
@@ -122,12 +121,18 @@ def get_args():
     parser.add_argument("--compress_warmup_epochs", default=0, type=int)
     parser.add_argument("--quantize_level", default=None, type=int)
     parser.add_argument("--is_biased", default=False, type=str2bool)
+    parser.add_argument("--majority_vote", default=False, type=str2bool)
 
-    parser.add_argument("--choco_consenus_stepsize", default=0.9, type=float)
+    parser.add_argument("--consensus_stepsize", default=0.9, type=float)
+    parser.add_argument("--evaluate_consensus", default=False, type=str2bool)
 
     parser.add_argument("--mask_momentum", default=False, type=str2bool)
     parser.add_argument("--clip_grad", default=False, type=str2bool)
     parser.add_argument("--clip_grad_val", default=None, type=float)
+
+    parser.add_argument("--local_step", default=1, type=int)
+    parser.add_argument("--turn_on_local_step_from", default=0, type=int)
+    parser.add_argument("--local_adam_memory_treatment", default=None, type=str)
 
     # momentum scheme
     parser.add_argument("--momentum_factor", default=0.9, type=float)

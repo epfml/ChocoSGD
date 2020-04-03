@@ -17,7 +17,8 @@ class Logger:
         :param filename: ending with .json
         :param auto_save: save the JSON file after every addition
         """
-        self.file_json = os.path.join(file_folder, "log.json")
+        self.file_folder = file_folder
+        self.file_json = os.path.join(file_folder, "log-1.json")
         self.file_txt = os.path.join(file_folder, "log.txt")
         self.values = []
 
@@ -42,14 +43,26 @@ class Logger:
         self.save_txt(content)
 
     def save_json(self):
-        """
-        Save the internal memory to a file
-        """
+        """Save the internal memory to a file."""
         with open(self.file_json, "w") as fp:
             json.dump(self.values, fp, indent=" ")
 
+        if len(self.values) > 1e3:
+            # reset 'values' and redirect the json file to other name.
+            self.values = []
+            self.redirect_new_json()
+
     def save_txt(self, value):
         write_txt(value + "\n", self.file_txt, type="a")
+
+    def redirect_new_json(self):
+        """get the number of existing json files under the current folder."""
+        existing_json_files = [
+            file for file in os.listdir(self.file_folder) if "json" in file
+        ]
+        self.file_json = os.path.join(
+            self.file_folder, "log-{}.json".format(len(existing_json_files) + 1)
+        )
 
 
 def display_args(conf):
@@ -112,9 +125,24 @@ def display_test_stat(conf, scheduler, tracker, label="local"):
         tags={"split": "test", "type": label},
         display=True,
     )
+    conf.logger.save_json()
 
 
 def dispaly_best_test_stat(conf, scheduler):
+    current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    conf.logger.log_metric(
+        name="runtime",
+        values={
+            "time": current_time,
+            "rank": conf.graph.rank,
+            "epoch": scheduler.epoch_,
+            "best_perf": scheduler.best_tracker.best_perf,
+        },
+        tags={"split": "test", "type": "local_model_avg"},
+        display=False,
+    )
+
     conf.logger.log(
         "best performance at local index {} \
         (best epoch {:.3f}, current epoch {:.3f}): {}.".format(

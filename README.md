@@ -22,10 +22,11 @@ If you use the code, please cite the following papers:
 ```
 and 
 ```
-@article{koloskova2019decentralized,
+@inproceedings{koloskova*2020decentralized,
   title={Decentralized Deep Learning with Arbitrary Communication Compression},
-  author={Koloskova, Anastasia and Lin, Tao and Stich, Sebastian U and Jaggi, Martin},
-  journal={arXiv preprint arXiv:1907.09356},
-  year={2019}
+  author={Anastasia Koloskova* and Tao Lin* and Sebastian U Stich and Martin Jaggi},
+  booktitle={International Conference on Learning Representations},
+  year={2020},
+  url={https://openreview.net/forum?id=SkgGCkrKvH}
 }
 ```

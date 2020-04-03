@@ -112,10 +112,11 @@ class QuantizationCompressor(object):
         return scale * np.sign(x) * norm * new_level / s
 
     def compress(self, arr, op, quantize_level, is_biased):
-        s = 2 ** quantize_level - 1
-        values = self.get_qsgd(arr, s, is_biased)
-
-        # n_bits = get_n_bits(values) * quantize_level / 32
+        if quantize_level != 32:
+            s = 2 ** quantize_level - 1
+            values = self.get_qsgd(arr, s, is_biased)
+        else:
+            values = arr
         return values
 
     def uncompress(self, arr):
