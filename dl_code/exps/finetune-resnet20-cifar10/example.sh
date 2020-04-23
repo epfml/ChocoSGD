@@ -37,7 +37,7 @@ $HOME/conda/envs/pytorch-py3.6/bin/python run.py \
     --lr 0.1 --lr_scaleup True --lr_scaleup_factor graph --lr_warmup True --lr_warmup_epochs 5 \
     --lr_schedule_scheme custom_multistep --lr_change_epochs 150,225 \
     --weight_decay 1e-4 --use_nesterov True --momentum_factor 0.9 \
-    --comm_op sign --choco_consenus_stepsize 0.4 --compress_ratio 0.9 --quantize_level 16 --is_biased True \
+    --comm_op sign --consensus_stepsize 0.45 --compress_ratio 0.9 --quantize_level 16 --is_biased True \
     --hostfile iccluster/hostfile --graph_topology ring --track_time True --display_tracked_time True \
     --python_path $HOME/conda/envs/pytorch-py3.6/bin/python --mpi_path $HOME/.openmpi/ --evaluate_avg True
 
@@ -52,7 +52,7 @@ $HOME/conda/envs/pytorch-py3.6/bin/python run.py \
     --lr 0.1 --lr_scaleup True --lr_scaleup_factor graph --lr_warmup True --lr_warmup_epochs 5 \
     --lr_schedule_scheme custom_multistep --lr_change_epochs 150,225 \
     --weight_decay 1e-4 --use_nesterov True --momentum_factor 0.9 \
-    --comm_op sign --choco_consenus_stepsize 0.4 --compress_ratio 0.9 --quantize_level 16 --is_biased True \
+    --comm_op sign --consensus_stepsize 0.5 --compress_ratio 0.9 --quantize_level 16 --is_biased True \
     --hostfile iccluster/hostfile --graph_topology social --track_time True --display_tracked_time True \
     --python_path $HOME/conda/envs/pytorch-py3.6/bin/python --mpi_path $HOME/.openmpi/ --evaluate_avg True
 
