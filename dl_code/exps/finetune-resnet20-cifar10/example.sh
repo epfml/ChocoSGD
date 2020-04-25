@@ -31,7 +31,7 @@ $HOME/conda/envs/pytorch-py3.6/bin/python run.py \
     --arch resnet20 --optimizer parallel_choco \
     --avg_model True --experiment test \
     --data cifar10 --pin_memory True \
-    --batch_size 128 --base_batch_size 64 --num_workers 0 --eval_freq 1 \
+    --batch_size 128 --base_batch_size 24 --num_workers 0 --eval_freq 1 \
     --num_epochs 300 --partition_data random --reshuffle_per_epoch True --stop_criteria epoch \
     --n_mpi_process 8 --n_sub_process 1 --world 0,0,0,0,0,0,0,0 --on_cuda True --use_ipc False --comm_device cuda \
     --lr 0.1 --lr_scaleup True --lr_scaleup_factor graph --lr_warmup True --lr_warmup_epochs 5 \
