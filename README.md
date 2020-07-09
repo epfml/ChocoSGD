@@ -1,19 +1,22 @@
-# CHOCO-SGD
-The code repository for the main experiments in the paper [Decentralized Stochastic Optimization and Gossip Algorithms with Compressed Communication](https://arxiv.org/abs/1902.00340) and [Decentralized Deep Learning with Arbitrary Communication Compression](https://arxiv.org/abs/1907.09356).
+# Choco-SGD
+This repository provides code for **communication-efficient decentralized ML training** (both deep learning, compatible with [PyTorch](https://pytorch.org/), and traditional convex machine learning models.
+
+We provide code for the main experiments in the papers 
+ - [Decentralized Stochastic Optimization and Gossip Algorithms with Compressed Communication](https://arxiv.org/abs/1902.00340) and 
+ - [Decentralized Deep Learning with Arbitrary Communication Compression](https://arxiv.org/abs/1907.09356).
 
 Please refer to the folders `convex_code` and `dl_code` for more details.
 
 
-# Reference
+# References
 If you use the code, please cite the following papers:
 
 ```
-@inproceedings{ksj2019choco,
-    author = {Anastasia Koloskova and Sebastian U. Stich and Martin Jaggi},
+@inproceedings{koloskova2019choco,
     title = {Decentralized Stochastic Optimization and Gossip Algorithms with Compressed Communication},
+    author = {Anastasia Koloskova and Sebastian U. Stich and Martin Jaggi},
     booktitle = {ICML 2019 - Proceedings of the 36th International Conference on Machine Learning},
     url = {http://proceedings.mlr.press/v97/koloskova19a.html},
-    series = {Proceedings of Machine Learning Research},
     publisher = {PMLR}, 
     volume = {97},
     pages = {3479--3487},
@@ -22,10 +25,10 @@ If you use the code, please cite the following papers:
 ```
 and 
 ```
-@inproceedings{koloskova*2020decentralized,
+@inproceedings{koloskova2020decentralized,
   title={Decentralized Deep Learning with Arbitrary Communication Compression},
   author={Anastasia Koloskova* and Tao Lin* and Sebastian U Stich and Martin Jaggi},
-  booktitle={International Conference on Learning Representations},
+  booktitle={ICLR 2020 - International Conference on Learning Representations},
   year={2020},
   url={https://openreview.net/forum?id=SkgGCkrKvH}
 }
